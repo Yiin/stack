@@ -1,0 +1,5 @@
+interface:
+  display_name: "Orchestrate"
+  short_description: "Coordinator mode: plan lanes, run fresh agents, verify, release, report"
+policy:
+  allow_implicit_invocation: false
