@@ -29,7 +29,9 @@ The project-map subagent and its hook are Claude Code only.
 
 - `bd` (beads) for issue tracking: https://github.com/gastownhall/beads
 - `simmer` and `bun` for `/cook-epic`: https://github.com/Yiin/simmer. It runs workers in
-  Claude Code, Codex or Pi (`--harness claude|codex|pi`). Its installer
+  Claude Code, Codex, Pi, Gemini CLI, Kimi, OpenCode or Crush
+  (`--harness claude|codex|pi|gemini|kimi|opencode|crush`), each on your own
+  login or API key for that CLI. Its installer
   also links the `/cook-it` and `/cook-epic` skills, so they are not in this download.
 - `jq` and `git` for the project-map hook.
 - Optional: the Codex CLI, for Codex lanes in `/orchestrate`.

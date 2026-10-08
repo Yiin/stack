@@ -124,6 +124,9 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .piece h2{font-size:clamp(34px,5vw,50px);font-weight:800}
 .piece .tag{font-family:var(--mono);font-size:14px;margin:8px 0 0;opacity:.85}
 .piece .what{font-size:19px;font-weight:500;margin:14px 0 0;max-width:36ch}
+.runs-on{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:12px 0 0}
+.runs-on .lbl{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.8;margin-right:4px}
+.runs-on .chip{background:#ffffffaa;color:inherit}
 .p-rules{background:var(--rules);color:var(--rules-ink)}
 .p-cook{background:var(--cook);color:var(--cook-ink)}
 .p-plan{background:var(--plan);color:var(--plan-ink)}
@@ -547,7 +550,8 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
   <div>
     <h2>/cook-epic</h2>
     <p class="tag">the whole menu · while you sleep</p>
-    <p class="what">A runner called <code>simmer</code> gives each dish to a fresh robot, checks it, and serves it. The robot can be Claude Code, Codex or Pi.</p>
+    <p class="what">A runner called <code>simmer</code> gives each dish to a fresh robot, checks it, and serves it.</p>
+    <div class="runs-on"><span class="lbl">runs on</span><span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Pi</span><span class="chip">Gemini CLI</span><span class="chip">Kimi</span><span class="chip">OpenCode</span><span class="chip">Crush</span></div>
 
     <div class="card">
       <h3>The stove</h3>
@@ -591,7 +595,7 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
       <div class="num"><b>1</b><span>fresh robot per dish</span></div>
       <div class="num"><b>3</b><span>checks before serving</span></div>
       <div class="num"><b><svg class="icon"><use href="#i-redo"/></svg></b><span>crash? run it again, it resumes</span></div>
-      <div class="num"><b>3</b><span>harnesses: Claude Code, Codex, Pi</span></div>
+      <div class="num"><b>7</b><span>harnesses, your own login</span></div>
     </div>
 
     <div class="uses">
@@ -772,7 +776,7 @@ curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh
 
   <div class="needs">
     <a class="need" href="https://github.com/gastownhall/beads"><i style="background:var(--plan);color:var(--plan-ink)"><svg class="icon"><use href="#i-ticket"/></svg></i><span><span class="req">needed</span><b>bd (beads)</b><small>Issue tracker. Every skill uses it.</small></span></a>
-    <a class="need" href="https://github.com/Yiin/simmer"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-pot"/></svg></i><span><span class="req">needed</span><b>simmer + bun</b><small>Runs /cook-epic on Claude Code, Codex or Pi. Installs /cook-it too.</small></span></a>
+    <a class="need" href="https://github.com/Yiin/simmer"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-pot"/></svg></i><span><span class="req">needed</span><b>simmer + bun</b><small>Runs /cook-epic on Claude Code, Codex, Pi, Gemini CLI, Kimi, OpenCode or Crush. Installs /cook-it too.</small></span></a>
     <div class="need"><i style="background:var(--map);color:var(--map-ink)"><svg class="icon"><use href="#i-terminal"/></svg></i><span><span class="req">optional</span><b>Codex CLI</b><small>For Codex lanes in /orchestrate</small></span></div>
     <a class="need" href="https://github.com/Yiin/pstack"><i style="background:var(--orch);color:var(--orch-ink)"><svg class="icon"><use href="#i-palette"/></svg></i><span><span class="req">optional</span><b>ui-ux-pro-max + unslop</b><small>Design and writing skills for project-map</small></span></a>
   </div>
