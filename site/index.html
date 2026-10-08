@@ -547,7 +547,7 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
   <div>
     <h2>/cook-epic</h2>
     <p class="tag">the whole menu · while you sleep</p>
-    <p class="what">A runner called <code>simmer</code> gives each dish to a fresh robot, checks it, and serves it.</p>
+    <p class="what">A runner called <code>simmer</code> gives each dish to a fresh robot, checks it, and serves it. The robot can be Claude Code, Codex or Pi.</p>
 
     <div class="card">
       <h3>The stove</h3>
@@ -591,6 +591,7 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
       <div class="num"><b>1</b><span>fresh robot per dish</span></div>
       <div class="num"><b>3</b><span>checks before serving</span></div>
       <div class="num"><b><svg class="icon"><use href="#i-redo"/></svg></b><span>crash? run it again, it resumes</span></div>
+      <div class="num"><b>3</b><span>harnesses: Claude Code, Codex, Pi</span></div>
     </div>
 
     <div class="uses">
@@ -771,7 +772,7 @@ curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh
 
   <div class="needs">
     <a class="need" href="https://github.com/gastownhall/beads"><i style="background:var(--plan);color:var(--plan-ink)"><svg class="icon"><use href="#i-ticket"/></svg></i><span><span class="req">needed</span><b>bd (beads)</b><small>Issue tracker. Every skill uses it.</small></span></a>
-    <a class="need" href="https://github.com/Yiin/simmer"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-pot"/></svg></i><span><span class="req">needed</span><b>simmer + bun</b><small>Runs /cook-epic. Installs /cook-it too.</small></span></a>
+    <a class="need" href="https://github.com/Yiin/simmer"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-pot"/></svg></i><span><span class="req">needed</span><b>simmer + bun</b><small>Runs /cook-epic on Claude Code, Codex or Pi. Installs /cook-it too.</small></span></a>
     <div class="need"><i style="background:var(--map);color:var(--map-ink)"><svg class="icon"><use href="#i-terminal"/></svg></i><span><span class="req">optional</span><b>Codex CLI</b><small>For Codex lanes in /orchestrate</small></span></div>
     <a class="need" href="https://github.com/Yiin/pstack"><i style="background:var(--orch);color:var(--orch-ink)"><svg class="icon"><use href="#i-palette"/></svg></i><span><span class="req">optional</span><b>ui-ux-pro-max + unslop</b><small>Design and writing skills for project-map</small></span></a>
   </div>
