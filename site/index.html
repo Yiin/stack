@@ -481,7 +481,7 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
         <li><svg class="icon"><use href="#i-x"/></svg>It needs many commits</li>
       </ul></div>
     </div>
-    <div class="files"><a href="files/skills/cook-it/SKILL.md"><svg class="icon"><use href="#i-file"/></svg>cook-it/SKILL.md</a></div>
+    <div class="files"><a href="https://github.com/Yiin/simmer/blob/main/skills/cook-it/SKILL.md"><svg class="icon"><use href="#i-file"/></svg>cook-it/SKILL.md</a></div>
   </div>
 </section>
 
@@ -603,11 +603,11 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
         <li><svg class="icon"><use href="#i-x"/></svg>Dishes need your taste mid-run</li>
       </ul></div>
     </div>
-    <div class="card note">
-      <svg class="icon" style="color:var(--bad)"><use href="#i-lock"/></svg>
-      <span><b>Needs <code>simmer</code>, a private tool.</b> Ask for access. Without it, run <code>/cook-it &lt;epic&gt;</code> again and again, one dish each time.</span>
-    </div>
-    <div class="files"><a href="files/skills/cook-epic/SKILL.md"><svg class="icon"><use href="#i-file"/></svg>cook-epic/SKILL.md</a></div>
+    <a class="card note" href="https://github.com/Yiin/simmer" style="text-decoration:none">
+      <svg class="icon" style="color:var(--epic-ink)"><use href="#i-pot"/></svg>
+      <span><b><code>simmer</code> is open source.</b> Its installer also sets up <code>/cook-it</code> and <code>/cook-epic</code>. github.com/Yiin/simmer</span>
+    </a>
+    <div class="files"><a href="https://github.com/Yiin/simmer/blob/main/skills/cook-epic/SKILL.md"><svg class="icon"><use href="#i-file"/></svg>cook-epic/SKILL.md</a></div>
   </div>
 </section>
 
@@ -751,7 +751,7 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
   <div class="kicker">Step 3</div>
   <h2>Install</h2>
   <div class="steps3">
-    <div><b>1</b>Copy skills, agent and hook</div>
+    <div><b>1</b>Copy the files, install simmer</div>
     <div><b>2</b>Edit <code>AGENTS.md</code> for your machines</div>
     <div><b>3</b>Save it as <code>~/.claude/CLAUDE.md</code></div>
   </div>
@@ -764,12 +764,14 @@ cp -rf stack/skills/* ~/.claude/skills/
 cp -f stack/agents/* ~/.claude/agents/
 cp -f stack/hooks/project-map-guard.sh ~/.claude/hooks/
 chmod +x ~/.claude/hooks/project-map-guard.sh
+<span class="c"># simmer, plus the /cook-it and /cook-epic skills (needs bun)</span>
+curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh | bash
 <span class="c"># then edit stack/AGENTS.md and save it as ~/.claude/CLAUDE.md</span></pre>
   </div>
 
   <div class="needs">
     <a class="need" href="https://github.com/gastownhall/beads"><i style="background:var(--plan);color:var(--plan-ink)"><svg class="icon"><use href="#i-ticket"/></svg></i><span><span class="req">needed</span><b>bd (beads)</b><small>Issue tracker. Every skill uses it.</small></span></a>
-    <div class="need"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-lock"/></svg></i><span><span class="req">for /cook-epic</span><b>simmer</b><small>Private. Ask for access.</small></span></div>
+    <a class="need" href="https://github.com/Yiin/simmer"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-pot"/></svg></i><span><span class="req">needed</span><b>simmer + bun</b><small>Runs /cook-epic. Installs /cook-it too.</small></span></a>
     <div class="need"><i style="background:var(--map);color:var(--map-ink)"><svg class="icon"><use href="#i-terminal"/></svg></i><span><span class="req">optional</span><b>Codex CLI</b><small>For Codex lanes in /orchestrate</small></span></div>
     <a class="need" href="https://github.com/Yiin/pstack"><i style="background:var(--orch);color:var(--orch-ink)"><svg class="icon"><use href="#i-palette"/></svg></i><span><span class="req">optional</span><b>ui-ux-pro-max + unslop</b><small>Design and writing skills for project-map</small></span></a>
   </div>

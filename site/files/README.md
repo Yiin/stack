@@ -12,6 +12,8 @@ cp -rf stack/skills/* ~/.claude/skills/
 cp -f stack/agents/* ~/.claude/agents/
 cp -f stack/hooks/project-map-guard.sh ~/.claude/hooks/
 chmod +x ~/.claude/hooks/project-map-guard.sh
+# simmer, plus the /cook-it and /cook-epic skills (needs bun)
+curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh | bash
 ```
 
 Then read `stack/AGENTS.md`. Change the sections about machines, tokens and
@@ -26,7 +28,8 @@ The project-map subagent and its hook are Claude Code only.
 ## What you also need
 
 - `bd` (beads) for issue tracking: https://github.com/gastownhall/beads
-- `simmer` for `/cook-epic`. It is a private tool. Ask for access.
+- `simmer` and `bun` for `/cook-epic`: https://github.com/Yiin/simmer. Its installer
+  also links the `/cook-it` and `/cook-epic` skills, so they are not in this download.
 - `jq` and `git` for the project-map hook.
 - Optional: the Codex CLI, for Codex lanes in `/orchestrate`.
 - Optional: the `ui-ux-pro-max` skill (https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
