@@ -8,4 +8,4 @@ Source for https://stack.yiin.lt: an explainer page plus a download of the agent
 - `site/img/` holds the illustrations. `art/gen.sh` made them with Gemini (`art/gen.sh <name> <aspect> "<prompt>"`), then `magick <name>.img -quality 82 site/img/<name>.webp`.
 - `./build.sh` rebuilds `site/stack.tar.gz`. Run it after you change `site/files/`.
 
-Coolify builds the Dockerfile (nginx) on push to `main`.
+Coolify builds the Dockerfile (nginx), app xvb9vv2s6rjghhkgw9bgds74. A push to `main` does not start a deploy (checked 2026-10-09). Push, then start it with the `use-coolify` skill (`POST /applications/<uuid>/start`).
