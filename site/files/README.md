@@ -34,6 +34,8 @@ The project-map subagent and its hook are Claude Code only.
   login or API key for that CLI. Its installer
   also links the `/cook-it` and `/cook-epic` skills, so they are not in this download.
 - `jq` and `git` for the project-map hook.
-- Optional: the Codex CLI, for Codex lanes in `/orchestrate`.
+- `/orchestrate` keeps your engines and projects in `~/.agents/orchestrate/` (set
+  `ORCHESTRATE_HOME` to move it). It asks you once and writes the file. Headless lanes run
+  through simmer, so any harness simmer supports can run a lane.
 - Optional: the `ui-ux-pro-max` skill (https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
   and the `unslop` skill (https://github.com/Yiin/pstack) for project-map.

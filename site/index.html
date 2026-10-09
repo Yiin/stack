@@ -622,19 +622,19 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
   <div>
     <h2>/orchestrate</h2>
     <p class="tag">head chef · never touches a pan</p>
-    <p class="what">You say what you want. It splits the work into lanes, runs a robot per lane, and checks every result.</p>
+    <p class="what">You say what you want. It splits the work into lanes, runs a robot per lane, and checks every result. Any harness can be the head chef, and each lane can run on a different model.</p>
 
     <div class="card">
       <h3>Lanes running now</h3>
       <div class="lanes">
-        <div class="lane"><span class="code">TX3</span><span class="who claude" title="Claude lane"><svg class="icon"><use href="#i-palette"/></svg></span><div class="track"><b style="--w:100%"></b></div><span class="stamp">checked ✓</span></div>
-        <div class="lane"><span class="code">PH1</span><span class="who codex" title="Codex lane"><svg class="icon"><use href="#i-flask"/></svg></span><div class="track live"><b style="--w:72%"></b></div><span class="stamp wait">running</span></div>
-        <div class="lane"><span class="code">QA2</span><span class="who codex" title="Codex lane"><svg class="icon"><use href="#i-wrench"/></svg></span><div class="track live"><b style="--w:50%"></b></div><span class="stamp wait">running</span></div>
-        <div class="lane"><span class="code">REL4</span><span class="who claude" title="Claude lane"><svg class="icon"><use href="#i-up"/></svg></span><div class="track"><b style="--w:4%"></b></div><span class="stamp wait">queued</span></div>
+        <div class="lane"><span class="code">TX3</span><span class="who claude" title="Strong-model lane"><svg class="icon"><use href="#i-palette"/></svg></span><div class="track"><b style="--w:100%"></b></div><span class="stamp">checked ✓</span></div>
+        <div class="lane"><span class="code">PH1</span><span class="who codex" title="Fast-model lane"><svg class="icon"><use href="#i-flask"/></svg></span><div class="track live"><b style="--w:72%"></b></div><span class="stamp wait">running</span></div>
+        <div class="lane"><span class="code">QA2</span><span class="who codex" title="Fast-model lane"><svg class="icon"><use href="#i-wrench"/></svg></span><div class="track live"><b style="--w:50%"></b></div><span class="stamp wait">running</span></div>
+        <div class="lane"><span class="code">REL4</span><span class="who claude" title="Strong-model lane"><svg class="icon"><use href="#i-up"/></svg></span><div class="track"><b style="--w:4%"></b></div><span class="stamp wait">queued</span></div>
       </div>
       <div class="who-key">
-        <span><i style="background:var(--claude)"></i>Claude: taste, looks, writing</span>
-        <span><i style="background:var(--codex)"></i>Codex: clear spec + tests</span>
+        <span><i style="background:var(--claude)"></i>Strong model: taste, looks, writing</span>
+        <span><i style="background:var(--codex)"></i>Fast model: clear spec + tests</span>
         <span><svg class="icon"><use href="#i-folder"/></svg>1 lane = 1 robot, 1 issue, 1 worktree</span>
       </div>
     </div>
@@ -650,7 +650,7 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
     </div>
 
     <div class="nums">
-      <div class="num"><b>20</b><span>agents at once, max</span></div>
+      <div class="num"><b>7</b><span>harnesses a lane can run on</span></div>
       <div class="num"><b>30s</b><span>to read a report</span></div>
       <div class="num"><b>0</b><span>lines of code it writes</span></div>
     </div>
@@ -670,7 +670,8 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
       <a href="files/skills/orchestrate/SKILL.md"><svg class="icon"><use href="#i-file"/></svg>SKILL.md</a>
       <a href="files/skills/orchestrate/references/brief-template.md"><svg class="icon"><use href="#i-file"/></svg>brief template</a>
       <a href="files/skills/orchestrate/references/lane-rules-template.md"><svg class="icon"><use href="#i-file"/></svg>lane rules template</a>
-      <a href="files/skills/orchestrate/examples/codex/run-lane.sh"><svg class="icon"><use href="#i-terminal"/></svg>Codex lane runner</a>
+      <a href="files/skills/orchestrate/bin/lane"><svg class="icon"><use href="#i-terminal"/></svg>lane runner</a>
+      <a href="files/skills/orchestrate/bin/watchdog"><svg class="icon"><use href="#i-terminal"/></svg>watchdog</a>
     </div>
   </div>
 </section>
@@ -776,8 +777,7 @@ curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh
 
   <div class="needs">
     <a class="need" href="https://github.com/gastownhall/beads"><i style="background:var(--plan);color:var(--plan-ink)"><svg class="icon"><use href="#i-ticket"/></svg></i><span><span class="req">needed</span><b>bd (beads)</b><small>Issue tracker. Every skill uses it.</small></span></a>
-    <a class="need" href="https://github.com/Yiin/simmer"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-pot"/></svg></i><span><span class="req">needed</span><b>simmer + bun</b><small>Runs /cook-epic on Claude Code, Codex, Pi, Gemini CLI, Kimi, OpenCode or Crush. Installs /cook-it too.</small></span></a>
-    <div class="need"><i style="background:var(--map);color:var(--map-ink)"><svg class="icon"><use href="#i-terminal"/></svg></i><span><span class="req">optional</span><b>Codex CLI</b><small>For Codex lanes in /orchestrate</small></span></div>
+    <a class="need" href="https://github.com/Yiin/simmer"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-pot"/></svg></i><span><span class="req">needed</span><b>simmer + bun</b><small>Runs /cook-epic and headless /orchestrate lanes on Claude Code, Codex, Pi, Gemini CLI, Kimi, OpenCode or Crush. Installs /cook-it too.</small></span></a>
     <a class="need" href="https://github.com/Yiin/pstack"><i style="background:var(--orch);color:var(--orch-ink)"><svg class="icon"><use href="#i-palette"/></svg></i><span><span class="req">optional</span><b>ui-ux-pro-max + unslop</b><small>Design and writing skills for project-map</small></span></a>
   </div>
   <div class="caption"><a href="files/">browse every file</a> · <a href="files/README.md">plain-text install notes</a></div>

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Coordinator watchdog. Loops every 60 s and exits with a report when it sees something new,
+# which wakes the coordinator. Run it as a background job and restart it whenever lanes change.
+#
+# Settings (env):
+#   STATE      required. A folder for its memory of what it already reported (the coordinator scratchpad).
+#   LANES      lanes to watch, space separated.
+#   WT_ROOT    the lane worktree root; lane <x> lives in $WT_ROOT/<x>.
+#   LOG_DIR    optional. Files named <lane>* here count as lane activity.
+#   PROD_URL   optional. A change of this page's content means a deploy happened.
+#   CHECKS     optional. A project script ($ORCHESTRATE_HOME/projects/<p>/checks.sh). Each line it prints is a finding.
+#   STALE_MIN  lane idle threshold in minutes (default 75). RAM_MIN_GB: low-RAM threshold (default 4).
+#
+# A lane is idle when it has no commit for STALE_MIN, no process with its worktree path in the
+# command line, and no file change in the worktree or LOG_DIR for 30 min.
+main() {
+  state="${STATE:?set STATE to a folder for watchdog state}"; mkdir -p "$state"
+  seen="$state/watchdog.seen"; touch "$seen"
+  stale="${STALE_MIN:-75}"; ram_min="${RAM_MIN_GB:-4}"
+  while true; do
+    out=""
+    for lane in ${LANES:-}; do
+      dir="${WT_ROOT:?set WT_ROOT}/$lane"; [ -d "$dir" ] || continue
+      last=$(git -C "$dir" log -1 --format=%ct 2>/dev/null)
+      age=$(( ($(date +%s) - ${last:-0}) / 60 ))
+      [ "$age" -gt "$stale" ] || continue
+      pgrep -f "$dir([/ ]|$)" >/dev/null && continue
+      [ -n "$(find "$dir" \( -name node_modules -o -name .git -o -name Library -o -name Temp \) -prune -o -type f -mmin -30 -print -quit 2>/dev/null)" ] && continue
+      [ -n "${LOG_DIR:-}" ] && [ -n "$(find "$LOG_DIR" -maxdepth 1 -name "$lane*" -mmin -30 -print -quit 2>/dev/null)" ] && continue
+      out+="lane $lane: idle, no commit for $age min"$'\n'
+    done
+    if [ -n "${PROD_URL:-}" ]; then
+      # An empty body (failed fetch) hashes to e3b0c44298fc: a network blip, not a deploy.
+      prod=$(timeout 20 curl -sf "$PROD_URL" | sha256sum | cut -c1-12)
+      [ -n "$prod" ] && [ "$prod" != e3b0c44298fc ] && out+="production page $prod"$'\n'
+    fi
+    avail=$(awk '/MemAvailable/{print int($2/1048576)}' /proc/meminfo)
+    [ "$avail" -lt "$ram_min" ] && out+="low RAM: $avail GB available"$'\n'
+    [ -n "${CHECKS:-}" ] && out+="$(timeout 120 bash "$CHECKS" 2>&1)"$'\n'
+    out=$(printf '%s' "$out" | sed '/^$/d')
+    # Report each finding once. Numbers are cut from the key, so a lane that stays idle does not fire every minute.
+    keys=$(printf '%s\n' "$out" | sed 's/ [0-9][0-9.]* \(min\|GB\|h\).*//' | sed '/^$/d' | sort -u)
+    new=$(comm -23 <(printf '%s\n' "$keys" | sed '/^$/d') <(sort -u "$seen"))
+    if [ -n "$new" ]; then
+      printf '%s\n' "$new" >> "$seen"
+      echo "WATCHDOG $(date +%H:%M)"; printf '%s\n' "$out"; exit 0
+    fi
+    sleep 60
+  done
+}
+main "$@"; exit $?

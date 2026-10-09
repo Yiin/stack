@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Run one lane headless on any engine, through `simmer lane`.
+# Usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>]
+# Writes <out-dir>/<lane>.last.md (final report) and <out-dir>/<lane>.log, then prints the exit code and the report.
+# With a systemd user session, the lane runs as transient unit lane-<lane>, so a memory-pressure
+# reap of the caller's shells cannot kill it. Stop one with: systemctl --user stop lane-<lane>
+# The body is one function, so bash parses it whole before it runs: editing this file cannot break running lanes.
+main() {
+  lane="${1:?usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>]}"
+  brief="${2:?brief file}"; shift 2
+  worktree=""; out_dir=""; pass=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --worktree) worktree="${2:?}"; shift 2 ;;
+      --out-dir) out_dir="${2:?}"; shift 2 ;;
+      --harness|--model|--effort) pass+=("$1" "${2:?}"); shift 2 ;;
+      *) echo "lane: unknown option $1" >&2; exit 2 ;;
+    esac
+  done
+  [ -n "$worktree" ] && [ -d "$worktree" ] || { echo "LANE $lane: worktree '$worktree' missing" >&2; exit 2; }
+  [ -n "$out_dir" ] || { echo "LANE $lane: --out-dir missing" >&2; exit 2; }
+  [ -f "$brief" ] || { echo "LANE $lane: brief '$brief' missing" >&2; exit 2; }
+  mkdir -p "$out_dir"
+  brief="$(readlink -f "$brief")"; worktree="$(readlink -f "$worktree")"; out_dir="$(readlink -f "$out_dir")"
+  report="$out_dir/$lane.last.md"; log="$out_dir/$lane.log"
+  cmd=(simmer lane "$brief" --worktree "$worktree" --out "$report" "${pass[@]}")
+  if systemctl --user show-environment >/dev/null 2>&1; then
+    systemd-run --user --wait --collect --quiet --unit="lane-$lane" \
+      --working-directory="$worktree" \
+      --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
+      --setenv=SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" --setenv=LANG="${LANG:-C.UTF-8}" \
+      /usr/bin/env bash -c '"$@" > "$0" 2>&1' "$log" "${cmd[@]}"
+  else
+    (cd "$worktree" && "${cmd[@]}") > "$log" 2>&1
+  fi
+  rc=$?
+  echo "LANE $lane exit $rc"
+  { tail -c 6000 "$report" 2>/dev/null || tail -n 30 "$log"; } && echo
+}
+main "$@"; exit $?
