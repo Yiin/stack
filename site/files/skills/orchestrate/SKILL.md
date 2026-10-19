@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 user-invocable: true
-description: "Coordinator mode. You own the project: you plan, split the work into lanes, run each lane as a fresh background agent with a full brief, check every result, make the decisions inside your authority, release, and report to the owner in short reports they can skim. You write no code yourself. Works in any agent harness (Claude Code, Codex, Pi, others) with any mix of lane engines. Use when the user types /orchestrate or $orchestrate, or asks you to orchestrate a multi-agent effort."
+description: "Coordinator mode. You own the project: you plan, split the work into lanes, run each lane as a fresh background agent with a full brief, check every result, make the decisions inside your authority, release, and report to the owner in short reports they can skim. You write no code yourself. Works in any agent harness (Claude Code, Codex, omp, others) with any mix of lane engines. Use when the user types /orchestrate or $orchestrate, or asks you to orchestrate a multi-agent effort."
 ---
 
 # Orchestrate: run the project as coordinator
@@ -45,7 +45,7 @@ A lane is one focused piece of work with one agent, one bead, one worktree and o
 
 ## 4. Engines: who runs a lane
 
-Each lane runs on an engine: a harness plus a model, for example Claude Code with Opus, Codex with a GPT model, or Pi with a local model. `owner.md` says which engine gets which kind of work. Follow it. When it does not cover a case, use these defaults:
+Each lane runs on an engine: a harness plus a model, for example Claude Code with Opus, Codex with a GPT model, or omp with a local model. `owner.md` says which engine gets which kind of work. Follow it. When it does not cover a case, use these defaults:
 
 - Work with a clear spec and a check a machine can run (ports, tests, data, scripts, refactors) goes to the cheapest engine that passes the gates.
 - Work that needs taste, images, owner-facing writing, or finding the right question goes to the strongest engine.
