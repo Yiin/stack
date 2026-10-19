@@ -1,40 +1,103 @@
 #!/usr/bin/env bash
 # Run one lane headless on any engine, through `simmer lane`.
-# Usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>]
+# Usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>] [--host <ssh-host>]
 # Writes <out-dir>/<lane>.last.md (final report) and <out-dir>/<lane>.log, then prints the exit code and the report.
 # With a systemd user session, the lane runs as transient unit lane-<lane>, so a memory-pressure
 # reap of the caller's shells cannot kill it. Stop one with: systemctl --user stop lane-<lane>
+#
+# Default local mode keeps the harness and worktree on the durable host.
+# Project tools send heavy commands to volatile processing hosts.
+# Remote mode (--host): the lane runs on that host, and --worktree is a path on that host.
+# The runner copies the brief to the host's lane folder (~/.local/state/orchestrate/lanes/ there), starts
+# `simmer lane` there as transient user unit lane-<lane> under the host's login-shell PATH, and polls it over
+# SSH every 30 s. A dropped SSH connection does not stop the lane. When the lane ends, the runner copies
+# <lane>.last.md and <lane>.log back to --out-dir. Stop one with: ssh <host> systemctl --user stop lane-<lane>
+# The host needs simmer, the harness CLI with a live login, and a systemd user session (loginctl enable-linger).
 # The body is one function, so bash parses it whole before it runs: editing this file cannot break running lanes.
 main() {
-  lane="${1:?usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>]}"
+  lane="${1:?usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>] [--host <ssh-host>]}"
   brief="${2:?brief file}"; shift 2
-  worktree=""; out_dir=""; pass=()
+  worktree=""; out_dir=""; host=""; pass=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --worktree) worktree="${2:?}"; shift 2 ;;
       --out-dir) out_dir="${2:?}"; shift 2 ;;
+      --host) host="${2:?}"; shift 2 ;;
       --harness|--model|--effort) pass+=("$1" "${2:?}"); shift 2 ;;
       *) echo "lane: unknown option $1" >&2; exit 2 ;;
     esac
   done
-  [ -n "$worktree" ] && [ -d "$worktree" ] || { echo "LANE $lane: worktree '$worktree' missing" >&2; exit 2; }
+  [[ "$lane" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "LANE $lane: name must match [A-Za-z0-9._-]+" >&2; exit 2; }
   [ -n "$out_dir" ] || { echo "LANE $lane: --out-dir missing" >&2; exit 2; }
   [ -f "$brief" ] || { echo "LANE $lane: brief '$brief' missing" >&2; exit 2; }
   mkdir -p "$out_dir"
-  brief="$(readlink -f "$brief")"; worktree="$(readlink -f "$worktree")"; out_dir="$(readlink -f "$out_dir")"
+  brief="$(readlink -f "$brief")"; out_dir="$(readlink -f "$out_dir")"
   report="$out_dir/$lane.last.md"; log="$out_dir/$lane.log"
+  if [ -n "$host" ]; then
+    remote_lane
+  else
+    local_lane
+  fi
+  echo "LANE $lane exit $rc"
+  { tail -c 6000 "$report" 2>/dev/null || tail -n 30 "$log"; } && echo
+}
+
+local_lane() {
+  [ -n "$worktree" ] && [ -d "$worktree" ] || { echo "LANE $lane: worktree '$worktree' missing" >&2; exit 2; }
+  worktree="$(readlink -f "$worktree")"
   cmd=(simmer lane "$brief" --worktree "$worktree" --out "$report" "${pass[@]}")
   if systemctl --user show-environment >/dev/null 2>&1; then
     systemd-run --user --wait --collect --quiet --unit="lane-$lane" \
       --working-directory="$worktree" \
       --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
       --setenv=SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" --setenv=LANG="${LANG:-C.UTF-8}" \
+      ${CLAUDE_CONFIG_DIR:+--setenv=CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"} \
       /usr/bin/env bash -c '"$@" > "$0" 2>&1' "$log" "${cmd[@]}"
   else
     (cd "$worktree" && "${cmd[@]}") > "$log" 2>&1
   fi
   rc=$?
-  echo "LANE $lane exit $rc"
-  { tail -c 6000 "$report" 2>/dev/null || tail -n 30 "$log"; } && echo
 }
+
+# Runs a command on the lane host. Arguments are quoted for the remote shell.
+on_host() {
+  ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$host" "$(printf '%q ' "$@")"
+}
+
+remote_lane() {
+  local rdir=".local/state/orchestrate/lanes" home rpath rbase rbrief rreport rlog rrc unit state miss=0
+  [ -n "$worktree" ] || { echo "LANE $lane: --worktree missing" >&2; exit 2; }
+  home="$(on_host printenv HOME)" || { echo "LANE $lane: host $host unreachable" >&2; exit 2; }
+  on_host test -d "$worktree" || { echo "LANE $lane: worktree '$worktree' missing on $host" >&2; exit 2; }
+  rbase="$home/$rdir/$lane"; rbrief="$rbase.brief.md"; rreport="$rbase.last.md"
+  rlog="$rbase.log"; rrc="$rbase.rc"; unit="lane-$lane"
+  # The host's login-shell PATH finds simmer and the harness CLIs (mise shims, ~/.local/bin, ~/.bun/bin).
+  rpath="$(ssh -o BatchMode=yes "$host" 'bash -lc "printf %s \"\$PATH\""' 2>/dev/null)"
+  [ -n "$rpath" ] || { echo "LANE $lane: no PATH from a login shell on $host" >&2; exit 2; }
+  on_host systemctl --user is-active -q "$unit" && { echo "LANE $lane: unit $unit already runs on $host" >&2; exit 2; }
+  on_host mkdir -p "$home/$rdir" || exit 2
+  on_host rm -f "$rreport" "$rrc" || exit 2
+  rsync -a "$brief" "$host:$rbrief" || { echo "LANE $lane: could not copy the brief to $host" >&2; exit 2; }
+  # The unit writes the exit code to <lane>.rc, so the result survives the unit (--collect) and any SSH drop.
+  # systemd expands $NAME and ${...} in the command line, so the wrapper uses only $0, $@ and $?.
+  on_host systemd-run --user --collect --quiet --unit="$unit" --working-directory="$worktree" \
+    --setenv=PATH="$rpath" --setenv=HOME="$home" --setenv=LANG="${LANG:-C.UTF-8}" \
+    /usr/bin/env bash -c '"$@" > "$0".log 2>&1; echo $? > "$0".rc.tmp; mv -f "$0".rc.tmp "$0".rc' \
+    "$rbase" simmer lane "$rbrief" --worktree "$worktree" --out "$rreport" "${pass[@]}" \
+    || { echo "LANE $lane: could not start $unit on $host" >&2; exit 2; }
+  echo "LANE $lane: started $unit on $host (log $host:$rlog)" >&2
+  while :; do
+    sleep 30
+    state="$(on_host bash -c 'if [ -f "$1" ]; then cat "$1"; elif systemctl --user is-active -q "$2"; then echo running; else echo gone; fi' _ "$rrc" "$unit" 2>/dev/null)"
+    case "$state" in
+      running) miss=0 ;;
+      gone) rc=1; echo "LANE $lane: $unit ended on $host without an exit code" >&2; break ;;
+      '') miss=$((miss + 1)); [ "$miss" -eq 1 ] && echo "LANE $lane: $host does not answer; the lane keeps running there" >&2 ;;
+      *) rc="$state"; break ;;
+    esac
+  done
+  rsync -a "$host:$rlog" "$log" 2>/dev/null || echo "LANE $lane: could not copy the log back" >&2
+  rsync -a "$host:$rreport" "$report" 2>/dev/null || echo "LANE $lane: no report on $host" >&2
+}
+
 main "$@"; exit $?

@@ -5,30 +5,69 @@
 # Settings (env):
 #   STATE      required. A folder for its memory of what it already reported (the coordinator scratchpad).
 #   LANES      lanes to watch, space separated.
-#   WT_ROOT    the lane worktree root; lane <x> lives in $WT_ROOT/<x>.
-#   LOG_DIR    optional. Files named <lane>* here count as lane activity.
+#   WT_ROOT    the lane worktree root; lane <x> lives in $WT_ROOT/<x>. With LANE_HOST, a path on that host.
+#   Normal durable-host lanes omit LANE_HOST. WT_ROOT names local worktrees.
+#   LANE_HOST  optional. The SSH host where the lanes run (remote mode of bin/lane). The lane checks then run
+#              there in one SSH call per loop, and files named <lane>* in that host's lane folder
+#              (~/.local/state/orchestrate/lanes) count as lane activity. Its low RAM is reported too.
+#              An unreachable host is a finding.
+#   LOG_DIR    optional. Files named <lane>* here (on this machine) count as lane activity.
 #   PROD_URL   optional. A change of this page's content means a deploy happened.
 #   CHECKS     optional. A project script ($ORCHESTRATE_HOME/projects/<p>/checks.sh). Each line it prints is a finding.
+#              The owner script $ORCHESTRATE_HOME/checks.sh (default ~/.agents/orchestrate/checks.sh) runs too, when it exists.
 #   STALE_MIN  lane idle threshold in minutes (default 75). RAM_MIN_GB: low-RAM threshold (default 4).
 #
 # A lane is idle when it has no commit for STALE_MIN, no process with its worktree path in the
-# command line, and no file change in the worktree or LOG_DIR for 30 min.
+# command line, and no file change in the worktree or the log folders for 30 min.
+
+# The per-lane idle check. Runs here, or on LANE_HOST through `bash -s`.
+# Arguments: <stale min> <wt root> <log dir or ""> <ram min GB> <ram label or ""> <lane>...
+LANE_CHECK='
+stale="$1"; root="$2"; logs="$3"; ram_min="$4"; ram_label="$5"; shift 5
+for lane in "$@"; do
+  dir="$root/$lane"; [ -d "$dir" ] || continue
+  last=$(git -C "$dir" log -1 --format=%ct 2>/dev/null)
+  age=$(( ($(date +%s) - ${last:-0}) / 60 ))
+  [ "$age" -gt "$stale" ] || continue
+  pgrep -f "$dir([/ ]|$)" >/dev/null && continue
+  [ -n "$(find "$dir" \( -name node_modules -o -name .git -o -name Library -o -name Temp \) -prune -o -type f -mmin -30 -print -quit 2>/dev/null)" ] && continue
+  [ -n "$logs" ] && [ -d "$logs" ] && [ -n "$(find "$logs" -maxdepth 1 -name "$lane*" -mmin -30 -print -quit 2>/dev/null)" ] && continue
+  echo "lane $lane: idle, no commit for $age min"
+done
+if [ -n "$ram_label" ]; then
+  avail=$(awk "/MemAvailable/{print int(\$2/1048576)}" /proc/meminfo)
+  [ "$avail" -lt "$ram_min" ] && echo "low RAM on $ram_label: $avail GB available"
+fi
+exit 0
+'
+
 main() {
   state="${STATE:?set STATE to a folder for watchdog state}"; mkdir -p "$state"
   seen="$state/watchdog.seen"; touch "$seen"
   stale="${STALE_MIN:-75}"; ram_min="${RAM_MIN_GB:-4}"
   while true; do
     out=""
-    for lane in ${LANES:-}; do
-      dir="${WT_ROOT:?set WT_ROOT}/$lane"; [ -d "$dir" ] || continue
-      last=$(git -C "$dir" log -1 --format=%ct 2>/dev/null)
-      age=$(( ($(date +%s) - ${last:-0}) / 60 ))
-      [ "$age" -gt "$stale" ] || continue
-      pgrep -f "$dir([/ ]|$)" >/dev/null && continue
-      [ -n "$(find "$dir" \( -name node_modules -o -name .git -o -name Library -o -name Temp \) -prune -o -type f -mmin -30 -print -quit 2>/dev/null)" ] && continue
-      [ -n "${LOG_DIR:-}" ] && [ -n "$(find "$LOG_DIR" -maxdepth 1 -name "$lane*" -mmin -30 -print -quit 2>/dev/null)" ] && continue
-      out+="lane $lane: idle, no commit for $age min"$'\n'
-    done
+    if [ -n "${LANES:-}" ]; then
+      if [ -n "${LANE_HOST:-}" ]; then
+        # shellcheck disable=SC2086
+        if res=$(timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=10 "$LANE_HOST" \
+            bash -s -- "$(printf '%q' "$stale")" "$(printf '%q' "${WT_ROOT:?set WT_ROOT}")" \
+            '"$HOME/.local/state/orchestrate/lanes"' "$ram_min" "$(printf '%q' "$LANE_HOST")" $LANES <<< "$LANE_CHECK"); then
+          out+="$res"$'\n'
+        else
+          out+="lane host $LANE_HOST: unreachable"$'\n'
+        fi
+        # Lane logs copied back to this machine also count.
+        [ -n "${LOG_DIR:-}" ] && out=$(printf '%s\n' "$out" | while IFS= read -r line; do
+          lane=$(printf '%s' "$line" | sed -n 's/^lane \([^:]*\): idle.*/\1/p')
+          if [ -n "$lane" ] && [ -n "$(find "$LOG_DIR" -maxdepth 1 -name "$lane*" -mmin -30 -print -quit 2>/dev/null)" ]; then continue; fi
+          printf '%s\n' "$line"
+        done)$'\n'
+      else
+        # shellcheck disable=SC2086
+        out+="$(bash -c "$LANE_CHECK" _ "$stale" "${WT_ROOT:?set WT_ROOT}" "${LOG_DIR:-}" "$ram_min" "" $LANES)"$'\n'
+      fi
+    fi
     if [ -n "${PROD_URL:-}" ]; then
       # An empty body (failed fetch) hashes to e3b0c44298fc: a network blip, not a deploy.
       prod=$(timeout 20 curl -sf "$PROD_URL" | sha256sum | cut -c1-12)
@@ -37,6 +76,8 @@ main() {
     avail=$(awk '/MemAvailable/{print int($2/1048576)}' /proc/meminfo)
     [ "$avail" -lt "$ram_min" ] && out+="low RAM: $avail GB available"$'\n'
     [ -n "${CHECKS:-}" ] && out+="$(timeout 120 bash "$CHECKS" 2>&1)"$'\n'
+    owner_checks="${ORCHESTRATE_HOME:-$HOME/.agents/orchestrate}/checks.sh"
+    [ -f "$owner_checks" ] && out+="$(timeout 120 bash "$owner_checks" 2>&1)"$'\n'
     out=$(printf '%s' "$out" | sed '/^$/d')
     # Report each finding once. Numbers are cut from the key, so a lane that stays idle does not fire every minute.
     keys=$(printf '%s\n' "$out" | sed 's/ [0-9][0-9.]* \(min\|GB\|h\).*//' | sed '/^$/d' | sort -u)

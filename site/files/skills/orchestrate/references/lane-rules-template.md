@@ -9,7 +9,7 @@ Keep the file short. Add a rule each time an efficiency review or an owner corre
 Every lane agent follows these rules, together with the rules in its brief.
 
 ## Where you work
-- Repo: <path>, main branch <name>. Worktrees: <wt-root>/<lane>, branch wt/<lane>. Create one with <command> if the brief's worktree is missing.
+- Repo: <path>, main branch <name>. Worktrees: ~/.local/share/agent-worktrees/<repo>/<lane>, branch wt/<lane>, made with the skill's `bin/worktree new <repo> <lane>` if the brief's worktree is missing. Then: <setup, e.g. bun install>.
 - Read <repo AGENTS.md / CLAUDE.md>. They apply in full.
 - Protected paths (never write): <list>.
 
@@ -27,4 +27,7 @@ Every lane agent follows these rules, together with the rules in its brief.
 
 ## Product rules
 - <licenses, i18n, style, budgets; owner rules with dates>
+
+## Routing adjustments
+- <date, role: change. Evidence: ledger lines. Owner rules marked "owner", with their words.> (SKILL.md section 4; leave the section out while there are none)
 ```

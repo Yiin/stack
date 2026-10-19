@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# One release at a time per project. A release lane takes the lock before its final main intake and keeps it
+# through push, CI, deploy and the production watch. Other release lanes wait on the lock, not on each other.
+#
+#   release-lock acquire <project> --holder <name> --lane <lane> [--sha <sha>] [--ttl <seconds>]
+#   release-lock wait    <project> --holder <name> --lane <lane> [--sha <sha>] [--ttl <seconds>] [--timeout <s>]
+#   release-lock refresh <project> --holder <name> --lane <lane> [--sha <sha>]
+#   release-lock release <project> --holder <name> --lane <lane>
+#   release-lock push    <project> --holder <name> --lane <lane> --sha <sha>
+#   release-lock bypass  <project> --reason <text> [--sha <sha>]
+#   release-lock status  <project>
+#
+# acquire  takes a free, stale or dead lock. It refuses a lock another live holder keeps fresh (exit 2), and it
+#          refuses while the newest CI or deploy run on the project's trunk is still running or about to start
+#          (exit 3), so a push from a session that ignores the lock is still respected. The same holder and
+#          lane acquiring again only refreshes.
+# wait     retries acquire every 30 s until it gets the lock or --timeout passes (default 540 s, exit 4).
+#          Call it again to keep waiting; one call stays under the 10 min limit for one shell call.
+# refresh  keeps the lock fresh. The holder refreshes at least once per ttl during CI, deploy and the watch;
+#          a lock not refreshed for ttl seconds (default 1800) is stale, and the next acquire takes it. --sha
+#          updates the release sha.
+# release  frees the lock. Only the holder and lane that took it can release it (exit 5 otherwise).
+# push     the git pre-push hook calls it before a push to the trunk. It succeeds only for the holder of a
+#          fresh lock, from the session that holds it (exit 5 otherwise), then refreshes the lock and logs PUSH.
+# bypass   logs an emergency push without the lock (BYPASS line). The hook calls it for RELEASE_LOCK_BYPASS=1.
+# status   prints the lock, its holder's session, the last bypass and the trunk's CI and deploy state.
+#
+# Identity is the --holder and --lane pair: holder is the session or coordinator name, lane the release lane.
+# The lock also records the caller's session process: RELEASE_LOCK_PID, else CLAUDE_PID (the Claude Code
+# session), with its start time against pid reuse. On the lock host a holder whose session process is gone
+# is dead, and the next acquire takes its lock without waiting for the ttl. A holder on another host, or one
+# with no recorded session, keeps the lock until the ttl. A live holder never loses a fresh lock.
+#
+# The lock lives on one host (RELEASE_LOCK_HOST, default this machine) in RELEASE_LOCK_DIR (default
+# ~/.local/state/orchestrate), outside any repo. On any other host this script runs itself there over SSH.
+# Per-project settings live in ~/.agents/orchestrate/projects/<project>/release-lock.conf (repo, branch,
+# ci_workflow, deploy_workflow). Every grant, refusal, push, bypass and release goes to <project>.release.log.
+#
+# Exit codes: 0 ok, 1 usage or error, 2 held by another holder, 3 CI or deploy running, 4 wait timed out,
+# 5 not the holder.
+set -euo pipefail
+
+# Start time of a process in clock ticks since boot (field 22 of /proc/<pid>/stat), or nothing when it is gone.
+# The comm field can hold spaces and parentheses, so the fields are counted after its last ')'.
+pid_start_of() {
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  local stat
+  stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  awk '{ print $20 }' <<< "${stat##*) }"
+}
+
+lock_host="${RELEASE_LOCK_HOST:-$(hostname)}"
+if [ -z "${RELEASE_LOCK_CLIENT:-}" ]; then
+  # Called on this host: the caller's session is RELEASE_LOCK_PID or the Claude Code session around it.
+  client_host="$(hostname)"
+  client_pid="${RELEASE_LOCK_PID:-${CLAUDE_PID:-}}"
+  client_pid_start="$(pid_start_of "$client_pid" || true)"
+  [ -n "$client_pid_start" ] || client_pid=''
+else
+  # Called over SSH from client_host, which resolved its own session.
+  client_host="$RELEASE_LOCK_CLIENT"
+  client_pid="${RELEASE_LOCK_CLIENT_PID:-}"
+  client_pid_start="${RELEASE_LOCK_CLIENT_PID_START:-}"
+fi
+if [ "$(hostname)" != "$lock_host" ]; then
+  exec ssh -o BatchMode=yes -o ConnectTimeout=10 "$lock_host" -- \
+    "RELEASE_LOCK_HOST=$(printf '%q' "$lock_host") RELEASE_LOCK_CLIENT=$(printf '%q' "$client_host")" \
+    "RELEASE_LOCK_CLIENT_PID=$(printf '%q' "$client_pid") RELEASE_LOCK_CLIENT_PID_START=$(printf '%q' "$client_pid_start")" \
+    '"$HOME/.agents/skills/orchestrate/bin/release-lock"' \
+    "$(printf '%q ' "$@")"
+fi
+
+state_dir="${RELEASE_LOCK_DIR:-$HOME/.local/state/orchestrate}"
+projects_dir="${RELEASE_LOCK_PROJECTS:-$HOME/.agents/orchestrate/projects}"
+gh_bin="${RELEASE_LOCK_GH:-gh}"
+# A deploy starts a few seconds after its CI run completes (workflow_run). Treat that gap as busy.
+deploy_start_grace=180
+
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 1; }
+die() { echo "release-lock: $*" >&2; exit 1; }
+now() { date +%s; }
+iso() { date -u -d "@$1" +%FT%TZ; }
+
+[[ "$client_host" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad client host: $client_host"
+[[ "$client_pid" =~ ^[0-9]*$ && "$client_pid_start" =~ ^[0-9]*$ ]] || die "bad client session pid"
+
+cmd="${1:-}"; project="${2:-}"
+[ -n "$cmd" ] && [ -n "$project" ] || usage
+[[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project name: $project"
+shift 2
+
+holder=''; lane=''; sha=''; ttl=1800; timeout=540; reason=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --holder) holder="${2:?--holder needs a value}"; shift 2 ;;
+    --lane) lane="${2:?--lane needs a value}"; shift 2 ;;
+    --sha) sha="${2:?--sha needs a value}"; shift 2 ;;
+    --ttl) ttl="${2:?--ttl needs a value}"; shift 2 ;;
+    --timeout) timeout="${2:?--timeout needs a value}"; shift 2 ;;
+    --reason) reason="${2:?--reason needs a value}"; shift 2 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+for value in "$holder" "$lane"; do
+  [[ -z "$value" || "$value" =~ ^[A-Za-z0-9._@:-]+$ ]] || die "holder and lane take letters, digits and ._@:- only"
+done
+[[ -z "$sha" || "$sha" =~ ^[0-9a-f]{7,40}$ ]] || die "--sha must be a commit hash"
+[[ "$ttl" =~ ^[0-9]+$ && "$ttl" -ge 1 && "$ttl" -le 7200 ]] || die "--ttl must be 1..7200 seconds"
+[[ "$timeout" =~ ^[0-9]+$ ]] || die "--timeout must be seconds"
+# The reason goes on one log line.
+reason="$(printf '%s' "$reason" | tr '\n\r\t' '   ' | cut -c1-300)"
+
+mkdir -p "$state_dir"
+lock_file="$state_dir/$project.release.lock"
+mutex_file="$state_dir/$project.release.mutex"
+log_file="$state_dir/$project.release.log"
+
+conf_file="$projects_dir/$project/release-lock.conf"
+repo=''; branch='main'; ci_workflow='ci.yml'; deploy_workflow='deploy.yml'
+if [ -f "$conf_file" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      repo) repo="$value" ;; branch) branch="$value" ;;
+      ci_workflow) ci_workflow="$value" ;; deploy_workflow) deploy_workflow="$value" ;;
+    esac
+  done < <(command grep -E '^[a-z_]+=' "$conf_file")
+fi
+
+log() { echo "$(iso "$(now)") $*" >> "$log_file"; }
+
+# Lock file: key=value lines, read without eval.
+read_lock() {
+  lock_holder=''; lock_lane=''; lock_sha=''; lock_host_name=''; lock_started=0; lock_refreshed=0; lock_ttl=0
+  lock_pid=''; lock_pid_start=''
+  [ -f "$lock_file" ] || return 1
+  while IFS='=' read -r key value; do
+    case "$key" in
+      holder) lock_holder="$value" ;; lane) lock_lane="$value" ;; sha) lock_sha="$value" ;;
+      host) lock_host_name="$value" ;; started_at) lock_started="$value" ;;
+      refreshed_at) lock_refreshed="$value" ;; ttl) lock_ttl="$value" ;;
+      pid) lock_pid="$value" ;; pid_start) lock_pid_start="$value" ;;
+    esac
+  done < "$lock_file"
+  [ -n "$lock_holder" ]
+}
+
+# The lock always records the session of its latest writer: the holder's session is the one that last
+# acquired, refreshed or pushed.
+write_lock() { # started_at refreshed_at ttl sha
+  local tmp="$lock_file.tmp.$$"
+  printf 'holder=%s\nlane=%s\nsha=%s\nhost=%s\npid=%s\npid_start=%s\nstarted_at=%s\nrefreshed_at=%s\nttl=%s\n' \
+    "$holder" "$lane" "$4" "$client_host" "$client_pid" "$client_pid_start" "$1" "$2" "$3" > "$tmp"
+  mv -f "$tmp" "$lock_file"
+}
+
+lock_is_fresh() { [ $(( $(now) - lock_refreshed )) -lt "$lock_ttl" ]; }
+is_mine() { [ "$lock_holder" = "$holder" ] && [ "$lock_lane" = "$lane" ]; }
+
+# Prints alive, gone or unchecked for the holder's session. Only a session on this host can be checked, and
+# only gone counts as dead: a recorded pid that no longer runs, or now belongs to a newer process.
+holder_session() {
+  if [ -z "$lock_pid" ] || [ "$lock_host_name" != "$(hostname)" ]; then echo unchecked; return; fi
+  if [ "$(pid_start_of "$lock_pid" || true)" = "$lock_pid_start" ]; then echo alive; else echo gone; fi
+}
+holder_is_dead() { [ "$(holder_session)" = gone ]; }
+
+# Prints why the trunk is busy, or nothing when the newest CI and deploy runs are complete.
+pipeline_busy() {
+  [ -n "$repo" ] || { echo "no repo in $conf_file; cannot check CI"; return; }
+  local ci deploy ci_status ci_updated deploy_status deploy_created
+  ci="$(timeout 30 "$gh_bin" run list -R "$repo" --workflow "$ci_workflow" --branch "$branch" -L 1 \
+    --json databaseId,status,updatedAt,headSha --jq '.[0] // {} | "\(.status) \(.updatedAt) \(.databaseId) \(.headSha)"')" \
+    || { echo "cannot read $ci_workflow runs"; return; }
+  deploy="$(timeout 30 "$gh_bin" run list -R "$repo" --workflow "$deploy_workflow" -L 1 \
+    --json databaseId,status,createdAt --jq '.[0] // {} | "\(.status) \(.createdAt) \(.databaseId)"')" \
+    || { echo "cannot read $deploy_workflow runs"; return; }
+  read -r ci_status ci_updated ci_id ci_sha <<< "$ci"
+  read -r deploy_status deploy_created deploy_id <<< "$deploy"
+  if [ "$ci_status" != completed ] && [ "$ci_status" != null ]; then
+    echo "$ci_workflow run $ci_id on ${ci_sha:0:9} is $ci_status"; return
+  fi
+  if [ "$deploy_status" != completed ] && [ "$deploy_status" != null ]; then
+    echo "$deploy_workflow run $deploy_id is $deploy_status"; return
+  fi
+  if [ "$ci_status" = completed ] && [ "$ci_updated" != null ]; then
+    local ci_done deploy_start
+    ci_done="$(date -d "$ci_updated" +%s)"
+    deploy_start="$( [ "$deploy_created" != null ] && date -d "$deploy_created" +%s || echo 0)"
+    if [ "$deploy_start" -lt "$ci_done" ] && [ $(( $(now) - ci_done )) -lt "$deploy_start_grace" ]; then
+      echo "$ci_workflow run $ci_id finished $(( $(now) - ci_done )) s ago; its deploy may still start"
+    fi
+  fi
+}
+
+push_env() { echo "RELEASE_LOCK_HOLDER=$holder RELEASE_LOCK_LANE=$lane"; }
+
+# Runs under the mutex. Returns 0 granted, 2 held, 3 pipeline busy.
+try_acquire() {
+  if read_lock; then
+    if is_mine; then
+      write_lock "$lock_started" "$(now)" "$ttl" "${sha:-$lock_sha}"
+      echo "refreshed: $holder/$lane holds the $project release lock"
+      echo "push with: $(push_env) git push origin HEAD:$branch"
+      return 0
+    fi
+    if lock_is_fresh && ! holder_is_dead; then
+      echo "held by $lock_holder/$lock_lane (sha ${lock_sha:-none}) since $(iso "$lock_started"), refreshed $(( $(now) - lock_refreshed )) s ago, ttl $lock_ttl s" >&2
+      return 2
+    fi
+  fi
+  local busy
+  busy="$(pipeline_busy)"
+  if [ -n "$busy" ]; then
+    echo "trunk busy: $busy" >&2
+    return 3
+  fi
+  if read_lock; then
+    if ! lock_is_fresh; then
+      log "STALE $lock_holder/$lock_lane sha=${lock_sha:-none} not refreshed for $(( $(now) - lock_refreshed )) s; taken by $holder/$lane"
+      echo "took a stale lock from $lock_holder/$lock_lane" >&2
+    else
+      log "DEAD $lock_holder/$lock_lane sha=${lock_sha:-none} session pid $lock_pid on $lock_host_name is gone; taken by $holder/$lane"
+      echo "took the lock of a dead holder from $lock_holder/$lock_lane (session pid $lock_pid is gone)" >&2
+    fi
+  fi
+  write_lock "$(now)" "$(now)" "$ttl" "$sha"
+  log "ACQUIRE $holder/$lane sha=${sha:-none} ttl=$ttl host=$client_host pid=${client_pid:-none}"
+  echo "acquired: $holder/$lane holds the $project release lock (ttl $ttl s; refresh it during the watch)"
+  echo "push with: $(push_env) git push origin HEAD:$branch"
+}
+
+with_mutex() {
+  exec 9>>"$mutex_file"
+  flock -w 60 9 || die "mutex busy for 60 s"
+  "$@"
+}
+
+need_identity() { [ -n "$holder" ] && [ -n "$lane" ] || die "$cmd needs --holder and --lane"; }
+
+case "$cmd" in
+  acquire)
+    need_identity
+    with_mutex try_acquire
+    ;;
+  wait)
+    need_identity
+    deadline=$(( $(now) + timeout ))
+    while true; do
+      rc=0
+      ( with_mutex try_acquire ) || rc=$?
+      [ "$rc" -eq 0 ] && exit 0
+      [ "$rc" -eq 2 ] || [ "$rc" -eq 3 ] || exit "$rc"
+      if [ "$(now)" -ge "$deadline" ]; then
+        echo "still waiting after $timeout s; call wait again" >&2
+        exit 4
+      fi
+      sleep "${RELEASE_LOCK_POLL:-30}"
+    done
+    ;;
+  refresh)
+    need_identity
+    refresh_lock() {
+      if ! read_lock || ! is_mine; then
+        echo "refused: $holder/$lane does not hold the $project release lock${lock_holder:+ ($lock_holder/$lock_lane does)}" >&2
+        return 5
+      fi
+      write_lock "$lock_started" "$(now)" "$lock_ttl" "${sha:-$lock_sha}"
+      echo "refreshed: $holder/$lane, ttl $lock_ttl s"
+    }
+    with_mutex refresh_lock
+    ;;
+  release)
+    need_identity
+    release_lock() {
+      if ! read_lock; then
+        echo "not held; nothing to release" >&2
+        return 0
+      fi
+      if ! is_mine; then
+        log "REFUSED release by $holder/$lane; held by $lock_holder/$lock_lane"
+        echo "refused: $lock_holder/$lock_lane holds the $project release lock, not $holder/$lane" >&2
+        return 5
+      fi
+      rm -f "${lock_file:?}"
+      log "RELEASE $holder/$lane sha=${lock_sha:-none} held $(( $(now) - lock_started )) s"
+      echo "released: $project release lock is free"
+    }
+    with_mutex release_lock
+    ;;
+  push)
+    need_identity
+    [ -n "$sha" ] || die "push needs --sha"
+    push_check() {
+      local refusal=''
+      if ! read_lock; then
+        refusal="nobody holds the $project release lock"
+      elif ! is_mine; then
+        refusal="$lock_holder/$lock_lane holds the $project release lock, not $holder/$lane"
+      elif ! lock_is_fresh; then
+        refusal="the lock of $holder/$lane is stale (not refreshed for $(( $(now) - lock_refreshed )) s); acquire it again"
+      elif [ -n "$lock_pid" ] && [ "$lock_host_name:$lock_pid:$lock_pid_start" != "$client_host:$client_pid:$client_pid_start" ]; then
+        refusal="the lock of $holder/$lane belongs to session pid $lock_pid on $lock_host_name, not to this session (pid ${client_pid:-none} on $client_host)"
+      fi
+      if [ -n "$refusal" ]; then
+        log "REFUSED push by $holder/$lane sha=$sha host=$client_host pid=${client_pid:-none}: $refusal"
+        echo "refused: $refusal" >&2
+        return 5
+      fi
+      write_lock "$lock_started" "$(now)" "$lock_ttl" "$sha"
+      log "PUSH $holder/$lane sha=$sha host=$client_host pid=${client_pid:-none}"
+      echo "push allowed: $holder/$lane holds the $project release lock"
+    }
+    with_mutex push_check
+    ;;
+  bypass)
+    [ -n "$reason" ] || die "bypass needs --reason"
+    with_mutex log "BYPASS ${holder:-unknown}/${lane:-unknown} sha=${sha:-none} host=$client_host pid=${client_pid:-none} reason: $reason"
+    echo "bypass logged in $log_file"
+    ;;
+  status)
+    if read_lock; then
+      freshness=stale; lock_is_fresh && freshness=fresh
+      echo "held: $lock_holder/$lock_lane sha=${lock_sha:-none} host=$lock_host_name since $(iso "$lock_started")" \
+        "refreshed $(( $(now) - lock_refreshed )) s ago, ttl $lock_ttl s ($freshness)," \
+        "session pid ${lock_pid:-none} $(holder_session)"
+    else
+      echo "free"
+    fi
+    busy="$(pipeline_busy)"
+    echo "trunk: ${busy:-idle}"
+    last_bypass="$(command grep ' BYPASS ' "$log_file" 2>/dev/null | tail -1 || true)"
+    [ -z "$last_bypass" ] || echo "last bypass: $last_bypass"
+    ;;
+  *) usage ;;
+esac

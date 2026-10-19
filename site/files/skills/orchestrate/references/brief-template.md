@@ -40,7 +40,7 @@ Out of scope: <what not to touch; file beads for it instead>
 - <LANE>: edits <files>. Do not touch them. Take in main often.
 
 ## Delivery
-- Worktree <path>, branch wt/<lane>. Lane log <path>, with timestamps.
+- Worktree <path> (under ~/.local/share/agent-worktrees/, made with the skill's `bin/worktree new`), branch wt/<lane>. Lane log <path>, with timestamps. Work only there.
 - Land the work as the project lane rules say (merge, or commit only and leave landing to the release lane).
 - Review page: a self-contained `index.html` (images beside it, relative paths) in a NEW folder <path>/<lane>-review/. If your harness can publish pages, publish it and give the link. Otherwise the coordinator publishes it.
 - Do not deploy. Remove your worktree when done, unless the lane rules say the coordinator does.
@@ -52,7 +52,8 @@ Out of scope: <what not to touch; file beads for it instead>
 - Gates: run the gates this brief lists, each once. A failure gets a fix and one rerun. Do not add repeats, variants or extra matrices unless a failure points to them. Take in main at most twice: at the start and before you land. A main intake that does not touch your files needs no new gate round. Once your gates pass, land the work at once.
 - A gate fails only for a real regression or a failed measurement. When a gate cannot run for a reason outside your scope, or compares the wrong things, apply the closest sound bar, say so plainly in the log and the report, land the work, and file a bead for the gap.
 - Do not spawn subagents.
-- The main checkout holds other agents' uncommitted files. Never edit, stash, reset or commit there. Never write in another lane's worktree. Do not kill processes you did not start.
+- Jobs on other machines: use the host picker the lane rules name, if any. Never hard-code host names.
+- The main checkout holds other agents' uncommitted files and unpushed commits. Never edit, stash, reset, commit or push there. If you push, push only from your worktree: `git rebase origin/<trunk>`, then `git push origin HEAD:<trunk>`. When the project's lane rules enforce the release lock, take it first and push with `RELEASE_LOCK_HOLDER=<name> RELEASE_LOCK_LANE=<lane>` on the push line. Never write in another lane's worktree. Do not kill processes you did not start.
 - No destructive git: no reset --hard, checkout --, restore, clean, stash, branch -D, force push. Never `git add -A` or `git add .`; add your files by name.
 - Guard and quote every variable in rm, mv, cp -f, rsync, find -delete, chmod/chown -R: "${dir:?}/${name:?}".
 - Never print tokens. Never commit .env files.

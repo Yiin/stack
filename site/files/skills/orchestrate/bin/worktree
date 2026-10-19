@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Agent worktrees. Every lane, and every agent that edits a repo, works in its own worktree under one root,
+# never in the main checkout and never under ~/Projects.
+#
+#   worktree new <repo-path> <lane> [base-ref]   create <root>/<repo>/<lane> on branch wt/<lane> from base-ref
+#                                                (default origin/main after a fetch) and print its path
+#   worktree list                                every worktree under the root: repo, lane, landed?, dirty?
+#   worktree clean [--apply]                     remove worktrees whose branch is landed in origin/<trunk> and
+#                                                that have no uncommitted changes and no process working
+#                                                in them. Dry run without --apply.
+#
+# Root: $ORCHESTRATE_WT_ROOT, default ~/.local/share/agent-worktrees. Deleting a worktree folder by hand
+# leaves git metadata behind; use `clean`, or `git -C <repo> worktree prune` afterwards.
+set -euo pipefail
+
+root="${ORCHESTRATE_WT_ROOT:-$HOME/.local/share/agent-worktrees}"
+
+trunk_of() { # trunk branch name of the repo a worktree belongs to (origin/HEAD, else main)
+  local ref
+  ref="$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  echo "${ref#origin/}" | sed 's/^$/main/'
+}
+
+status_of() { # prints "landed|unlanded clean|dirty" for a worktree path
+  local dir="$1" trunk landed dirty
+  trunk="$(trunk_of "$dir")"
+  if git -C "$dir" merge-base --is-ancestor HEAD "origin/$trunk" 2>/dev/null; then landed=landed; else landed=unlanded; fi
+  if [ -z "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then dirty=clean; else dirty=dirty; fi
+  echo "$landed $dirty"
+}
+
+in_use() { # true when a process runs with its working directory inside the worktree
+  local dir="$1" proc cwd
+  for proc in /proc/[0-9]*; do
+    cwd="$(readlink "$proc/cwd" 2>/dev/null)" || continue
+    case "$cwd/" in "$dir"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+each_worktree() { # prints worktree paths under the root
+  [ -d "$root" ] || return 0
+  find "$root" -mindepth 2 -maxdepth 2 -type d | while read -r dir; do
+    [ -e "$dir/.git" ] && echo "$dir"
+  done
+}
+
+cmd="${1:-list}"
+case "$cmd" in
+  new)
+    repo="$(readlink -f "${2:?usage: worktree new <repo-path> <lane> [base-ref]}")"
+    lane="${3:?usage: worktree new <repo-path> <lane> [base-ref]}"
+    git -C "$repo" fetch --quiet origin
+    base="${4:-origin/$(trunk_of "$repo")}"
+    dir="$root/$(basename "$repo")/$lane"
+    mkdir -p "$(dirname "$dir")"
+    git -C "$repo" worktree add --quiet -b "wt/$lane" "$dir" "$base"
+    echo "$dir"
+    ;;
+  list)
+    each_worktree | while read -r dir; do
+      printf '%-60s %-28s %s\n' "$dir" "$(git -C "$dir" branch --show-current)" "$(status_of "$dir")"
+    done
+    ;;
+  clean)
+    apply="${2:-}"
+    git_dirs_fetched=""
+    each_worktree | while read -r dir; do
+      common="$(git -C "$dir" rev-parse --git-common-dir)"
+      case " $git_dirs_fetched " in *" $common "*) ;; *) git -C "$dir" fetch --quiet origin || true; git_dirs_fetched="$git_dirs_fetched $common" ;; esac
+      read -r landed dirty <<<"$(status_of "$dir")"
+      branch="$(git -C "$dir" branch --show-current)"
+      if [ "$landed" != landed ] || [ "$dirty" != clean ]; then
+        echo "keep    $dir ($branch: $landed, $dirty)"
+        continue
+      fi
+      if in_use "$dir"; then
+        echo "keep    $dir ($branch: a process still works in it)"
+        continue
+      fi
+      if [ "$apply" = --apply ]; then
+        main_checkout="$(dirname "$(readlink -f "$common")")"
+        git -C "$main_checkout" worktree remove "${dir:?}"
+        [ -n "$branch" ] && git -C "$main_checkout" branch -d "$branch" >/dev/null || true
+        echo "removed $dir ($branch)"
+      else
+        echo "remove  $dir ($branch: landed, clean)  [dry run; pass --apply]"
+      fi
+    done
+    ;;
+  *)
+    sed -n '2,14p' "$0" >&2
+    exit 2
+    ;;
+esac

@@ -294,7 +294,7 @@ Show the user the resulting tree: `bd list --parent $EPIC --pretty`.
 
 For each CODE repo the epic touches:
 
-1. **Location**: the card lives in the CODE repo (the repo the children edit), not the beads repo — for multi-repo epics like health (beads at `/home/yiin/Projects/health`) -> dashboard-health (code at `/home/yiin/Projects/dashboard-health`) these differ. Default location: `docs/agent-orientation.md` in the code repo. If the repo already keeps operational agent docs elsewhere (e.g. an AGENTS.md with literal commands — dashboard-health has an 8.3KB one), extend that file instead of creating a duplicate.
+1. **Location**: the card lives in the CODE repo (the repo the children edit), not the beads repo — for multi-repo epics (beads in one repo, code in another) these differ. Default location: `docs/agent-orientation.md` in the code repo. If the repo already keeps operational agent docs elsewhere (e.g. an AGENTS.md with literal commands), extend that file instead of creating a duplicate.
 2. **Content**: mirror the epic Context template — path map with one-line responsibilities, literal check commands, conventions/vocabulary pointers, gotchas. Hard budget ~4KB. Operational facts only; no narrative architecture prose. Write it FROM the investigator findings of step 2 (self-contained file:line path maps) — that's exactly the material workers otherwise re-derive.
 3. **Refresh, don't rewrite**: if a card already exists, verify each mandated section is present and current; update only stale or missing parts. If it's current, skip the write.
 4. **Commit before handoff**: commit the card to the code repo before finishing this step. cook-epic's preflight hard-stops on uncommitted tracked changes, so an uncommitted card blocks the run.
