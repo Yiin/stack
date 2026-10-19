@@ -5,8 +5,9 @@ The page at https://stack.yiin.lt explains each one and when to use it.
 
 ## Use it as a reference
 
-This is the setup that works for me. It is here to share ideas, not to copy
-as-is. No piece needs the others, and no tool is required. `bd` is my issue
+This is the setup that works for me. It is here to share ideas. Copy all of
+it or one piece, then change it to fit how you work. No piece needs the
+others, and no tool is required. `bd` is my issue
 tracker and `simmer` is my runner. Any tracker or runner can do the same job.
 
 The best way to use it: ask your agent something like this.
