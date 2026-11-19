@@ -1,7 +1,7 @@
 # Agent stack
 
 How I run coding agents: one rules file, four skills, and one subagent.
-The page at https://stack.yiin.lt explains each one and when to use it.
+The page at https://stack.yiin.dev explains each one and when to use it.
 
 ## Use it as a reference
 
@@ -12,7 +12,7 @@ tracker and `simmer` is my runner. Any tracker or runner can do the same job.
 
 The best way to use it: ask your agent something like this.
 
-> Read https://stack.yiin.lt and the files it links as an outside reference.
+> Read https://stack.yiin.dev and the files it links as an outside reference.
 > Compare it with how we work now. Suggest changes that fit our tools and
 > workflow. Keep what already works. Skip what we do not need.
 
@@ -24,7 +24,7 @@ To try my exact setup first, the steps below copy it.
 ## Install (Claude Code)
 
 ```bash
-curl -fsSL https://stack.yiin.lt/stack.tar.gz | tar -xz
+curl -fsSL https://stack.yiin.dev/stack.tar.gz | tar -xz
 mkdir -p ~/.claude/skills ~/.claude/agents ~/.claude/hooks
 cp -rf stack/skills/* ~/.claude/skills/
 cp -f stack/agents/* ~/.claude/agents/

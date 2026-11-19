@@ -1,6 +1,6 @@
 # stack
 
-Source for https://stack.yiin.lt: an explainer page plus a download of the agent stack
+Source for https://stack.yiin.dev: an explainer page plus a download of the agent stack
 (AGENTS.md, /orchestrate, /plan-epic, /cook-epic, /cook-it, project-map).
 
 - `site/index.html` is the page.
