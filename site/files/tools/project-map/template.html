@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Project map template. Data lives in the map-data block; render.py fills it. Do not edit a rendered copy by hand. -->
+<style>
+
+:root{
+  --bg:#f3f2ee;--surface:#ffffff;--surface-2:#ebe9e3;--surface-3:#e2e0d8;--line:#dcd9d0;--line-strong:#c9c5ba;
+  --text:#17171a;--muted:#67666e;--faint:#9a989f;
+  --accent:#5b46c9;--accent-soft:#ece8ff;--on-accent:#fff;
+  --ok:#1d7f4c;--ok-soft:#dcf1e4;--warn:#9a6200;--warn-soft:#f7ead0;--bad:#bf3a33;--bad-soft:#f8dedb;--idle:#8d8b93;--idle-soft:#e6e4de;
+  --track:#e3e1da;--shadow:0 1px 0 rgba(0,0,0,.03),0 8px 24px -12px rgba(0,0,0,.12);
+  --serif:"Instrument Serif",Georgia,serif;--sans:Inter,system-ui,sans-serif;--mono:"JetBrains Mono",ui-monospace,monospace;
+  color-scheme:light;
+}
+:root[data-theme=dark]{
+  --bg:#0b0b0d;--surface:#131316;--surface-2:#1a1a1e;--surface-3:#222227;--line:#25252b;--line-strong:#34343c;
+  --text:#ededf0;--muted:#9393a0;--faint:#62626d;
+  --accent:#b9a6ff;--accent-soft:#231d3d;--on-accent:#120d26;
+  --ok:#7ee2a8;--ok-soft:#14291e;--warn:#f2c46d;--warn-soft:#2c2412;--bad:#ff8a80;--bad-soft:#331816;--idle:#6f6f7a;--idle-soft:#1d1d22;
+  --track:#232329;--shadow:0 1px 0 rgba(255,255,255,.02),0 12px 32px -16px rgba(0,0,0,.6);
+  color-scheme:dark;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#0b0b0d;--surface:#131316;--surface-2:#1a1a1e;--surface-3:#222227;--line:#25252b;--line-strong:#34343c;
+  --text:#ededf0;--muted:#9393a0;--faint:#62626d;
+  --accent:#b9a6ff;--accent-soft:#231d3d;--on-accent:#120d26;
+  --ok:#7ee2a8;--ok-soft:#14291e;--warn:#f2c46d;--warn-soft:#2c2412;--bad:#ff8a80;--bad-soft:#331816;--idle:#6f6f7a;--idle-soft:#1d1d22;
+  --track:#232329;--shadow:0 1px 0 rgba(255,255,255,.02),0 12px 32px -16px rgba(0,0,0,.6);
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text)}
+body{font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+button{font:inherit;color:inherit}
+a{color:var(--accent)}
+.wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+.mono{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+
+/* top bar */
+.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:52px}
+.top .crumb{display:flex;gap:10px;align-items:center;min-width:0}
+.top .crumb b{font-weight:600;font-size:14px;white-space:nowrap}
+.top .meta{margin-left:auto;display:flex;gap:16px;align-items:center;color:var(--muted);font-size:12.5px;white-space:nowrap}
+.seg{display:inline-flex;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:2px}
+.seg button{border:0;background:none;padding:3px 9px;border-radius:6px;font-size:12px;color:var(--muted);cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+
+/* hero */
+.hero{padding:44px 0 28px}
+.hero h1{font-family:var(--serif);font-weight:400;font-size:64px;line-height:1;margin:10px 0 14px;letter-spacing:-.01em}
+.hero p{font-size:19px;line-height:1.45;margin:0;max-width:62ch;color:var(--muted)}
+.hero p strong{color:var(--text);font-weight:500}
+
+/* bento */
+.bento{display:grid;grid-template-columns:2.45fr 1fr;gap:10px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.card-h{display:flex;align-items:baseline;gap:12px;padding:20px 22px 0}
+.card-h h2{font-size:17px;font-weight:600;margin:0}
+.card-h .sub{color:var(--muted);font-size:13px}
+
+/* milestones */
+.ms{padding:10px 10px 12px}
+.ms-row{display:grid;grid-template-columns:44px minmax(0,1.25fr) minmax(0,1.6fr) 118px;gap:14px;align-items:center;padding:11px 12px;border-radius:10px;cursor:pointer;border:0;background:none;width:100%;text-align:left}
+.ms-row:hover{background:var(--surface-2)}
+.ms-row[aria-pressed=true]{background:var(--accent-soft)}
+.ms-code{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.ms-name{font-weight:550;font-size:14.5px;line-height:1.3}
+.ms-exit{font-size:12.5px;color:var(--muted);line-height:1.35;margin-top:2px}
+.segbar{display:flex;gap:3px;height:10px}
+.segbar span{position:relative;border-radius:3px;background:var(--track);overflow:hidden;min-width:6px}
+.segbar span i{position:absolute;inset:0 auto 0 0;background:var(--fill,var(--accent));border-radius:3px}
+.ms-nums{text-align:right;font-size:12.5px;color:var(--muted);line-height:1.3}
+.ms-nums b{display:block;font-size:15px;color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.ms-legend{display:flex;gap:16px;flex-wrap:wrap;padding:4px 22px 18px;color:var(--muted);font-size:12px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
+
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:2px 9px;border-radius:99px;white-space:nowrap;line-height:1.6}
+.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.s-done{color:var(--ok);background:var(--ok-soft)}
+.s-prog{color:var(--warn);background:var(--warn-soft)}
+.s-stuck{color:var(--bad);background:var(--bad-soft)}
+.s-idle{color:var(--idle);background:var(--idle-soft)}
+.s-exit{color:var(--ok);background:var(--ok-soft)}
+
+/* needs you */
+.needs{display:flex;flex-direction:column;height:100%}
+.needs .big{font-family:var(--serif);font-size:84px;line-height:.9;padding:18px 22px 0}
+.needs .big small{display:block;font-family:var(--sans);font-size:15px;color:var(--text);margin-top:12px;font-weight:500}
+.next{margin:18px 14px 0;padding:14px 14px 15px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
+.next p{margin:6px 0 0;font-size:14px;line-height:1.45}
+.answered{padding:18px 22px 20px}
+.answered ul{list-style:none;margin:8px 0 0;padding:0}
+.answered li{display:grid;grid-template-columns:1fr auto;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:13px}
+.answered li span{color:var(--muted);font-size:12px;white-space:nowrap}
+.answered li em{grid-column:1/-1;font-style:normal;color:var(--muted);font-size:12.5px;margin-top:-4px}
+
+/* tiles */
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px}
+.tile{background:var(--surface-2);border:1px solid var(--line);border-radius:16px;padding:18px 18px 16px;display:flex;flex-direction:column;min-height:178px}
+.tile .num{font-size:30px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
+.tile .num small{font-size:15px;color:var(--muted);font-weight:500;letter-spacing:0}
+.tile .badge{display:inline-block;margin-left:8px;font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:6px;background:var(--accent-soft);color:var(--accent);vertical-align:5px}
+.tile .viz{flex:1;display:flex;align-items:center;padding:14px 0 10px}
+.tile .cap{font-size:13.5px;font-weight:500}
+.tile .cap span{display:block;color:var(--muted);font-weight:400;font-size:12.5px}
+.dots{display:grid;grid-template-columns:repeat(11,1fr);gap:5px;width:100%}
+.dots i{aspect-ratio:1;border-radius:50%;background:var(--track)}
+.dots i.on{background:var(--accent)}
+.life{width:100%}
+.life .bar{height:8px;border-radius:99px;background:var(--track);overflow:hidden}
+.life .bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
+.life .ends{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-top:6px}
+
+/* section heads */
+.sec{padding:56px 0 0}
+.sec-h{display:flex;align-items:flex-end;gap:24px;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap}
+.sec-h h2{font-family:var(--serif);font-weight:400;font-size:40px;line-height:1;margin:6px 0 0}
+.sec-h p{margin:0;color:var(--muted);max-width:52ch}
+
+/* proof (accordion + viewer) */
+.proof{display:grid;grid-template-columns:340px 1fr;gap:28px;align-items:start}
+.plist{border-top:1px solid var(--line)}
+.pitem{border-bottom:1px solid var(--line)}
+.pitem>button{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:10px;width:100%;padding:14px 2px;cursor:pointer}
+.pitem>button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.pitem .pn{font-size:15.5px;font-weight:550;flex:1}
+.pitem[aria-expanded=false] .pn{color:var(--muted)}
+.pitem .pc{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.pitem .arrow{width:24px;height:24px;border-radius:50%;border:1px solid var(--line-strong);display:grid;place-items:center;font-size:12px;color:var(--muted);flex:none}
+.pitem[aria-expanded=true] .arrow{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.pbody{display:none;padding:0 2px 16px}
+.pitem[aria-expanded=true] .pbody{display:block}
+.pbody p{margin:0 0 10px;color:var(--muted);font-size:13.5px}
+.pbody .lifeline{height:2px;background:var(--track);border-radius:2px;overflow:hidden;margin-top:12px}
+.pbody .lifeline i{display:block;height:100%;background:var(--accent)}
+.pbody .lifetxt{font-size:12px;color:var(--muted);margin-top:6px}
+.viewer{background:var(--surface-2);border:1px solid var(--line);border-radius:18px;padding:18px;min-width:0}
+.stage{height:520px;border-radius:12px;background:var(--surface-3);display:grid;place-items:center;overflow:hidden;cursor:zoom-in;position:relative}
+.stage img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+.stage .expired,.stage .textproof{cursor:default;padding:32px;max-width:520px;text-align:center;color:var(--muted)}
+.textproof h3{font-family:var(--serif);font-weight:400;font-size:28px;color:var(--text);margin:8px 0 10px}
+.vmeta{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;padding:14px 2px 4px}
+.vmeta b{font-weight:550}
+.vmeta .exp{margin-left:auto;font-size:12.5px;color:var(--muted)}
+.thumbs{display:flex;gap:8px;overflow-x:auto;padding:10px 2px 2px}
+.thumbs button{flex:none;width:92px;height:62px;border-radius:8px;border:1px solid var(--line);background:var(--surface-3) center/cover no-repeat;cursor:pointer;padding:0;opacity:.65}
+.thumbs button[aria-current=true]{opacity:1;outline:2px solid var(--accent);outline-offset:1px}
+
+/* parts list */
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+.filters button{border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:4px 12px;font-size:12.5px;cursor:pointer;color:var(--muted)}
+.filters button[aria-pressed=true]{background:var(--text);color:var(--bg);border-color:var(--text)}
+.parts{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.pg-h{display:flex;gap:12px;align-items:baseline;padding:14px 18px 8px;background:var(--surface-2);border-top:1px solid var(--line)}
+.pg-h:first-child{border-top:0}
+.pg-h b{font-weight:600}
+.pg-h span{color:var(--muted);font-size:12.5px}
+.prow{display:grid;grid-template-columns:44px minmax(0,1.3fr) 112px minmax(0,1fr) 64px minmax(0,1.7fr);gap:14px;align-items:center;padding:12px 18px;border-top:1px solid var(--line);cursor:pointer;width:100%;background:none;border-left:0;border-right:0;border-bottom:0;text-align:left}
+.prow:hover{background:var(--surface-2)}
+.prow .ix{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+.prow .nm{font-weight:550}
+.prow .pb{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.prow .pb .bar{flex:1;height:5px;background:var(--track);border-radius:99px;overflow:hidden;min-width:40px}
+.prow .pb .bar i{display:block;height:100%;border-radius:99px;background:var(--fill,var(--accent))}
+.prow .pf{font-size:12px;color:var(--muted);white-space:nowrap}
+.prow .pf.has{color:var(--accent)}
+.prow .lf{font-size:12.5px;color:var(--muted);line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+
+/* drawer (side panel) */
+.backdrop{position:fixed;inset:0;background:rgba(5,5,8,.62);opacity:0;pointer-events:none;transition:opacity .5s cubic-bezier(.32,.72,0,1);z-index:40}
+.drawer{position:fixed;top:16px;right:16px;bottom:16px;width:min(600px,calc(100vw - 32px));background:var(--surface);border:1px solid var(--line);border-radius:18px;z-index:41;transform:translateX(105%);transition:transform .5s cubic-bezier(.32,.72,0,1);display:flex;flex-direction:column;box-shadow:0 30px 80px -20px rgba(0,0,0,.5)}
+body.open .backdrop{opacity:1;pointer-events:auto}
+body.open .drawer{transform:none}
+.dr-h{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)}
+.dr-h button{margin-left:auto;border:0;background:var(--surface-2);width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:16px;color:var(--muted)}
+.dr-b{padding:22px 24px 32px;overflow-y:auto}
+.dr-b h3{font-family:var(--serif);font-weight:400;font-size:42px;line-height:1.05;margin:6px 0 14px}
+.dr-b p{margin:0 0 16px}
+.kv{display:grid;grid-template-columns:110px 1fr;border-top:1px solid var(--line);margin:18px 0}
+.kv div{padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.kv div:nth-child(odd){color:var(--muted)}
+.dr-shots{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.dr-shots figure{margin:0;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.dr-shots img{display:block;width:100%;height:150px;object-fit:cover;object-position:top;cursor:zoom-in}
+.dr-shots figcaption{font-size:11.5px;color:var(--muted);padding:7px 9px;display:flex;justify-content:space-between;gap:6px}
+
+/* lightbox */
+.lb{position:fixed;inset:0;z-index:60;background:rgba(5,5,8,.9);display:none;place-items:center;padding:24px;cursor:zoom-out}
+.lb.on{display:grid}
+.lb img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
+
+footer{padding:40px 0 60px;color:var(--muted);font-size:12.5px}
+
+@media (max-width:980px){
+  .bento{grid-template-columns:1fr}
+  .tiles{grid-template-columns:repeat(2,1fr)}
+  .proof{grid-template-columns:1fr}
+  .stage{height:420px}
+  .prow{grid-template-columns:36px 1fr auto;row-gap:6px}
+  .prow .pb{grid-column:2/4}
+  .prow .pf{display:none}
+  .prow .lf{grid-column:2/4}
+}
+@media (max-width:640px){
+  .wrap{padding:0 14px}
+  .hero h1{font-size:46px}
+  .hero p{font-size:16.5px}
+  .top .meta .upd{display:none}
+  .ms-row{grid-template-columns:30px 1fr 84px;row-gap:10px}
+  .ms-row .ms-nums{grid-column:3;grid-row:1}
+  .ms-row .segbar{grid-column:1/-1;grid-row:2}
+  .top .crumb .mono{display:none}
+  .tiles{grid-template-columns:1fr}
+  .stage{height:360px}
+  .sec-h h2{font-size:32px}
+}
+@media (prefers-reduced-motion:reduce){.drawer,.backdrop{transition:none}}
+
+/* open calls */
+.calls{padding:14px 14px 0;display:flex;flex-direction:column;gap:10px}
+.call{padding:14px;border-radius:12px;border:1px solid var(--accent);background:var(--accent-soft)}
+.call b.q{display:block;margin-bottom:4px;font-weight:600}
+.call .ctx{font-size:12.5px;color:var(--muted);margin:0 0 8px}
+.call .opts{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.call .opts button{font-size:12.5px;padding:5px 11px;border-radius:8px;background:var(--surface);border:1px solid var(--line);cursor:pointer}
+.call .opts button:hover:not(:disabled){border-color:var(--accent)}
+.call .opts button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.call .opts button:disabled{cursor:default;opacity:.55}
+.call .opts button[aria-pressed=true]:disabled{opacity:1}
+.call .other{display:none;gap:6px;margin:4px 0 8px}
+.call .other.on{display:flex}
+.call .other input{flex:1;min-width:0;font:inherit;font-size:13px;padding:6px 9px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
+.call .other button{font-size:12.5px;padding:5px 11px;border-radius:8px;border:0;background:var(--accent);color:var(--on-accent);cursor:pointer}
+.call small{display:block;color:var(--muted);font-size:12px;line-height:1.45}
+.call small b{font-weight:600;color:var(--text)}
+.needs .big.has{color:var(--accent)}
+
+/* panels */
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px 20px}
+.panel h3{font-size:15px;font-weight:600;margin:0 0 10px}
+.panel ul{margin:0;padding-left:18px;color:var(--muted);font-size:13.5px}
+.panel li{margin:0 0 6px}
+
+/* media and links */
+.stage video{max-width:100%;max-height:100%;display:block}
+.thumbs button.vid{display:grid;place-items:center;font-size:18px;color:var(--muted)}
+.links{display:flex;gap:14px;flex-wrap:wrap;padding:4px 2px 0;font-size:13px}
+.dr-shots video{display:block;width:100%;height:150px;object-fit:cover;background:#000}
+.dr-shots .gone{height:150px;display:grid;place-items:center;color:var(--muted);font-size:12.5px;padding:10px;text-align:center}
+.changed-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-left:8px;vertical-align:2px}
+.prow.changed{box-shadow:inset 3px 0 0 var(--accent)}
+
+/* inline copy for a chat column */
+html.inline,html.inline body{background:transparent}
+html.inline .top{display:none}
+html.inline .wrap{padding:0}
+html.inline .hero{padding:8px 0 20px}
+html.inline .hero h1{font-size:44px}
+html.inline .bento{grid-template-columns:1fr}
+html.inline .tiles{grid-template-columns:repeat(2,1fr)}
+html.inline .proof{grid-template-columns:1fr}
+html.inline .stage{height:400px}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <div class="crumb"><span class="mono">Project map</span><b id="topName"></b></div>
+  <div class="meta">
+    <span class="upd" id="topUpd"></span>
+    <div class="seg" role="group" aria-label="Theme">
+      <button data-t="auto" aria-pressed="true">Auto</button><button data-t="light" aria-pressed="false">Light</button><button data-t="dark" aria-pressed="false">Dark</button>
+    </div>
+  </div>
+</div></header>
+
+<main class="wrap">
+  <section class="hero">
+    <div class="mono" id="kicker"></div>
+    <h1 id="h1"></h1>
+    <p id="verdict"></p>
+  </section>
+
+  <section class="bento" aria-label="Progress and what needs you">
+    <div class="card">
+      <div class="card-h"><h2>Milestones</h2><span class="sub">Each bar is split by part. Click one to filter the parts list.</span></div>
+      <div class="ms" id="ms"></div>
+      <div class="ms-legend">
+        <span><i class="dot" style="background:var(--ok)"></i>Part done</span>
+        <span><i class="dot" style="background:var(--accent)"></i>Items done in a part</span>
+        <span><i class="dot" style="background:var(--bad)"></i>Stuck part</span>
+        <span><i class="dot" style="background:var(--track)"></i>Items left</span>
+      </div>
+    </div>
+    <div class="card needs">
+      <div class="card-h"><h2>Needs you</h2></div>
+      <div class="big" id="needBig"></div>
+      <div class="calls" id="calls"></div>
+      <div class="next" id="claudeOn"></div>
+      <div class="answered" id="answeredBox"><div class="mono">You answered</div><ul id="answered"></ul></div>
+    </div>
+  </section>
+
+  <section class="tiles" id="tiles" aria-label="Key numbers"></section>
+
+  <section class="sec" id="proof-sec">
+    <div class="sec-h">
+      <div><div class="mono">What works, shown</div><h2>Proof</h2></div>
+      <p id="proofLede"></p>
+    </div>
+    <div class="proof">
+      <div class="plist" id="plist"></div>
+      <div class="viewer">
+        <div class="stage" id="stage"></div>
+        <div class="vmeta" id="vmeta"></div>
+        <div class="links" id="vlinks"></div>
+        <div class="thumbs" id="thumbs"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="parts-sec">
+    <div class="sec-h">
+      <div><div class="mono" id="partsCount"></div><h2>Parts</h2></div>
+      <div class="filters" id="filters"></div>
+    </div>
+    <div class="parts" id="parts"></div>
+  </section>
+
+  <section class="sec" id="panels-sec" hidden>
+    <div class="sec-h"><div><div class="mono">For this project</div><h2>More</h2></div></div>
+    <div class="panels" id="panels"></div>
+  </section>
+
+  <footer id="foot"></footer>
+</main>
+
+<div class="backdrop" id="backdrop"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drTitle">
+  <div class="dr-h"><span class="mono" id="drKicker">Part</span><button id="drClose" aria-label="Close">×</button></div>
+  <div class="dr-b" id="drBody"></div>
+</aside>
+<div class="lb" id="lb"><img id="lbImg" alt=""></div>
+
+<script type="application/json" id="map-data">__MAP_DATA__</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("map-data").textContent);
+const TODAY = new Date();
+const LIFE_DAYS = D.proof_days || 30;
+const MILESTONES = D.milestones || [];
+const PARTS = D.parts || [];
+const CALLS = D.needs_you || [];
+const STATUS = {done:["Done","s-done"],prog:["In progress","s-prog"],idle:["Not started","s-idle"],stuck:["Stuck","s-stuck"]};
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const safeUrl = u => /^(https?:\/\/|\.{0,2}\/|[\w.-]+\/|#)/.test(String(u||"")) && !/^\s*javascript:/i.test(u) ? u : "#";
+const fmt = d => d.toLocaleDateString("en-GB",{day:"numeric",month:"short",timeZone:"UTC"}).replace(/(\d+) (\w+)/,"$2 $1");
+const kb = n => n >= 1048576 ? (n/1048576).toFixed(1)+" MB" : Math.max(1,Math.round(n/1024))+" KB";
+if (D.inline) document.documentElement.classList.add("inline");
+
+function life(captured){
+  const c = new Date(String(captured).slice(0,10)+"T00:00:00Z");
+  const exp = new Date(c.getTime()+LIFE_DAYS*864e5);
+  const left = Math.ceil((exp-TODAY)/864e5);
+  return {captured:c, exp, left, frac:Math.max(0,Math.min(1,left/LIFE_DAYS)), expired: left<=0};
+}
+const shotsOf = p => ((p.proof||{}).shots||[]).map(s => Object.assign({}, s, {L: life(s.captured)}, {gone: s.expired || life(s.captured).expired}));
+const liveShots = p => shotsOf(p).filter(s => !s.gone);
+const testsOf = p => (p.proof||{}).tests || "";
+const linksOf = p => (p.proof||{}).links || [];
+const hasProof = p => liveShots(p).length || testsOf(p);
+const isVideo = s => s.kind === "video" || /\.(webm|mp4)$/i.test(s.src);
+
+function msStats(code){
+  const ps = PARTS.filter(p=>p.m===code);
+  let d=0,t=0; ps.forEach(p=>{ if(p.t){d+=p.d||0;t+=p.t} });
+  return {ps,d,t, stuck: ps.some(p=>p.status==="stuck"), anyWork: ps.some(p=>p.status==="done"||(p.d||0)>0||p.status==="stuck")};
+}
+function totals(){ let d=0,t=0; PARTS.forEach(p=>{if(p.t){d+=p.d||0;t+=p.t}}); return {d,t}; }
+
+// theme
+(function(){
+  let saved=null; try{saved=localStorage.getItem("pm-theme")}catch(e){}
+  const apply = t => {
+    if(t==="auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme",t);
+    document.querySelectorAll(".seg button").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.t===t)));
+  };
+  apply(saved||"auto");
+  document.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>{apply(b.dataset.t);try{localStorage.setItem("pm-theme",b.dataset.t)}catch(e){}});
+})();
+
+// header and verdict
+(function(){
+  document.title = D.page_title || (D.project + " Map");
+  $("#topName").textContent = D.project;
+  $("#h1").textContent = D.project;
+  $("#kicker").textContent = [D.title, D.epic ? "epic " + D.epic : ""].filter(Boolean).join(" · ");
+  const upd = new Date(D.updated_at);
+  $("#topUpd").textContent = "Updated " + fmt(upd) + ", " + upd.toISOString().slice(11,16) + " UTC" + (D.commit ? " · " + D.commit : "");
+  if (D.headline) { $("#verdict").textContent = D.headline; return; }
+  const {d,t} = totals();
+  const active = MILESTONES.filter(m=>!m.exit_met && msStats(m.code).anyWork).length;
+  const stuck = PARTS.filter(p=>p.status==="stuck").length;
+  const need = CALLS.length;
+  $("#verdict").innerHTML = (t ? `<strong>${Math.round(d/t*100)}% of the counted items are done</strong> (${d} of ${t}), and ${active} milestone${active===1?" has":"s have"} work under way. ` : "")
+    + (stuck ? `<strong>${stuck} part${stuck>1?"s are":" is"} stuck.</strong> ` : "")
+    + (need ? `<strong>${need} call${need>1?"s need":" needs"} you.</strong>` : `<strong>Nothing needs you.</strong>`)
+    + (D.claude_on ? ` Next: ${esc(D.claude_on.split(". ")[0].replace(/\.$/,""))}.` : "");
+})();
+
+// milestones
+let msFilter = null;
+function renderMs(){
+  $("#ms").innerHTML = MILESTONES.map(m=>{
+    const s = msStats(m.code);
+    const segs = s.ps.map(p=>{
+      const w = p.t || 5;
+      const f = p.status==="done" ? 1 : (p.t ? (p.d||0)/p.t : (p.status==="stuck" ? 1 : 0));
+      const fill = p.status==="done" ? "var(--ok)" : p.status==="stuck" ? "var(--bad)" : "var(--accent)";
+      const tip = p.status==="done" ? "done" : p.status==="stuck" ? "stuck" : (p.t ? (p.d||0)+" of "+p.t : "not started");
+      return `<span style="flex:${w}" title="${esc(p.name)}: ${tip}"><i style="width:${f*100}%;--fill:${fill}"></i></span>`;
+    }).join("") || `<span style="flex:1"></span>`;
+    let nums, chip;
+    if (m.exit_met) {
+      chip = `<span class="chip s-exit">Exit met ${esc(m.exit_met)}</span>`;
+      nums = s.t && s.d < s.t ? `<b>${Math.round(s.d/s.t*100)}%</b>${s.t-s.d} items go on` : `<b>Done</b>${s.ps.length} of ${s.ps.length} parts`;
+    } else if (s.stuck) {
+      chip = `<span class="chip s-stuck">Stuck</span>`;
+      nums = s.t ? `<b>${Math.round(s.d/s.t*100)}%</b>${s.d} of ${s.t} items` : `<b>–</b>`;
+    } else if (s.anyWork) {
+      chip = `<span class="chip s-prog">In progress</span>`;
+      nums = s.t ? `<b>${Math.round(s.d/s.t*100)}%</b>${s.d} of ${s.t} items` : `<b>–</b>${s.ps.filter(p=>p.status==="done").length} of ${s.ps.length} parts`;
+    } else {
+      chip = `<span class="chip s-idle">Not started</span>`;
+      nums = `<b>–</b>${s.t ? "0 of "+s.t+" items" : "no items yet"}`;
+    }
+    return `<button class="ms-row" data-m="${esc(m.code)}" aria-pressed="${msFilter===m.code}">
+      <span class="ms-code">${esc(m.code)}</span>
+      <span><span class="ms-name">${esc(m.name)}</span><div class="ms-exit">Exit: ${esc(m.exit)}</div><div style="margin-top:6px">${chip}</div></span>
+      <span class="segbar">${segs}</span>
+      <span class="ms-nums">${nums}</span></button>`;
+  }).join("");
+  document.querySelectorAll(".ms-row").forEach(b=>b.onclick=()=>{
+    msFilter = msFilter===b.dataset.m ? null : b.dataset.m; renderMs(); renderParts();
+    if(msFilter) document.getElementById("parts-sec").scrollIntoView({behavior:"smooth",block:"start"});
+  });
+}
+
+// needs you
+(function(){
+  const n = CALLS.length;
+  $("#needBig").className = "big" + (n ? " has" : "");
+  $("#needBig").innerHTML = `${n}<small>${n ? (n===1 ? "One call waits for you." : n+" calls wait for you.") : "Nothing needs you now."}</small>`;
+  $("#calls").innerHTML = CALLS.map(c => `<div class="call" data-q="${esc(c.id)}">
+      <b class="q">${esc(c.question)}</b>${c.context ? `<p class="ctx">${esc(c.context)}</p>` : ""}
+      <div class="opts" role="group" aria-label="Options">${(c.options||[]).map(o=>{const v = typeof o==="string"?o:o.value, l = typeof o==="string"?o:(o.label||o.value);
+        return `<button data-v="${esc(v)}">${esc(l)}${v===c.default?" · default":""}</button>`}).join("")}<button data-other="1">Other…</button></div>
+      <div class="other"><input type="text" maxlength="500" placeholder="Your answer" aria-label="Your answer"><button data-send="1">Send</button></div>
+      <small class="qstate">No reply → ${esc(c.default||"the default")}.${c.meanwhile ? " Claude keeps going on " + esc(c.meanwhile) + "." : ""}</small></div>`).join("");
+  if (!n) $("#calls").style.display = "none";
+  $("#claudeOn").innerHTML = D.claude_on ? `<div class="mono">Claude works on</div><p>${esc(D.claude_on)}</p>` : "";
+  if (!D.claude_on) $("#claudeOn").style.display = "none";
+  const ans = (D.answered||[]).slice(0,6);
+  $("#answered").innerHTML = ans.map(a=>`<li>${esc(a.q)}<span>${esc(a.d||"")}</span><em>${esc(a.a)}</em></li>`).join("");
+  if (!ans.length) $("#answeredBox").style.display = "none";
+  wireCalls();
+})();
+
+// a click saves the answer in the artifact's database; Claude reads answers/<id> at its next check
+async function wireCalls(){
+  const boxes = [...document.querySelectorAll(".call")];
+  if (!boxes.length) return;
+  boxes.forEach(b => b.querySelectorAll("button").forEach(x => x.disabled = true));
+  let db = null, canWrite = true;
+  try { db = await claude.use("db"); } catch (e) { db = null; }
+  if (!db) { boxes.forEach(b => { b.querySelector(".qstate").insertAdjacentHTML("beforeend", " This page cannot save answers here. Tell Claude in chat."); }); return; }
+  try { const u = await claude.use("user"); if (u && u.canEdit && (await u.canEdit()) === false) canWrite = false; } catch (e) {}
+  boxes.forEach(box => {
+    const qid = box.dataset.q, state = box.querySelector(".qstate"), idle = state.innerHTML;
+    const opts = [...box.querySelectorAll(".opts button")], other = box.querySelector(".other"), input = other.querySelector("input");
+    const ref = db.doc("answers/" + qid);
+    let current = null, busy = false, locked = false;
+    const show = d => {
+      current = d && d.choice || null; locked = !!(d && d.seen_at);
+      const known = opts.some(o => o.dataset.v === current);
+      opts.forEach(o => o.setAttribute("aria-pressed", String(o.dataset.v ? o.dataset.v === current : (current && !known))));
+      opts.forEach(o => o.disabled = locked || !canWrite);
+      if (!d) { state.innerHTML = idle; return; }
+      const at = new Date(d.answered_at).toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+      state.innerHTML = locked
+        ? `You chose <b>${esc(d.choice)}</b> · ${at}. Claude read it${d.note ? ": " + esc(d.note) : "."}`
+        : `You chose <b>${esc(d.choice)}</b> · ${at}. Saved. Claude reads it at its next check. You can still change it.`;
+    };
+    const save = async v => {
+      v = String(v||"").trim(); if (!v || busy || locked || v === current) return;
+      busy = true; state.textContent = "Saving…";
+      try { await ref.set({question: CALLS.find(c=>c.id===qid).question, choice: v, answered_at: new Date().toISOString()}); other.classList.remove("on"); }
+      catch (e) { state.textContent = e && e.code === "invalid_argument" ? "Only the owner or an editor can answer here." : "Could not save. Try again."; }
+      busy = false;
+    };
+    const timer = setTimeout(() => { if (current === null) state.innerHTML = idle + " Answers cannot be reached yet."; }, 10000);
+    ref.onSnapshot(s => { if (!s.metadata.fromCache) clearTimeout(timer); show(s.exists ? s.data() : null); }, () => clearTimeout(timer));
+    opts.forEach(o => { o.disabled = !canWrite; o.onclick = () => o.dataset.other ? (other.classList.toggle("on"), input.focus()) : save(o.dataset.v); });
+    other.querySelector("button").onclick = () => save(input.value);
+    input.onkeydown = e => { if (e.key === "Enter") save(input.value); };
+  });
+}
+
+// tiles
+(function(){
+  const {d,t} = totals();
+  const withProof = PARTS.filter(hasProof).length;
+  const shots = PARTS.flatMap(liveShots);
+  const bytes = shots.reduce((n,s)=>n+(s.bytes||0),0);
+  const stuck = PARTS.filter(p=>p.status==="stuck");
+  const running = PARTS.reduce((n,p)=>n+(p.running||0),0);
+  const msBar = MILESTONES.filter(m=>msStats(m.code).t).map(m=>{const s=msStats(m.code);return `<span style="flex:${s.t}" title="${esc(m.code)}: ${s.d} of ${s.t}"><i style="width:${s.d/s.t*100}%"></i></span>`}).join("");
+  const dots = PARTS.map(p=>`<i class="${hasProof(p)?"on":""}" title="${esc(p.name)}"></i>`).join("");
+  const next = shots.length ? shots.reduce((a,s)=>s.L.exp<a.L.exp?s:a) : null;
+  $("#tiles").innerHTML = `
+  <div class="tile"><div class="num">${d}<small> of ${t}</small>${t?`<span class="badge">${Math.round(d/t*100)}%</span>`:""}</div>
+    <div class="viz"><div class="segbar" style="width:100%">${msBar}</div></div>
+    <div class="cap">Items done<span>All milestones, split by milestone</span></div></div>
+  <div class="tile"><div class="num">${withProof}<small> of ${PARTS.length}</small></div>
+    <div class="viz"><div class="dots">${dots}</div></div>
+    <div class="cap">Parts with proof<span>Screenshots, video or a test record</span></div></div>
+  <div class="tile"><div class="num">${stuck.length}<small> stuck</small>${running?`<span class="badge">${running} running</span>`:""}</div>
+    <div class="viz" style="color:var(--muted);font-size:13px">${stuck.length ? stuck.map(p=>`${esc(p.name)} waits on ${esc(p.waiting_on||"something unnamed")}.`).join(" ") : "Nothing waits on a person, an issue or an outside service."}</div>
+    <div class="cap">Blocked work<span>A stuck part names what it waits on</span></div></div>
+  <div class="tile"><div class="num">${shots.length}<small> shots · ${kb(bytes)}</small></div>
+    <div class="viz">${next ? `<div class="life"><div class="bar"><i style="width:${next.L.frac*100}%"></i></div><div class="ends"><span>Captured ${fmt(next.L.captured)}</span><span>${next.L.left} days left</span></div></div>` : `<span style="color:var(--muted);font-size:13px">No screenshots on this map.</span>`}</div>
+    <div class="cap">Proof media<span>${next ? "Next expiry " + fmt(next.L.exp) : "Screenshots expire after " + LIFE_DAYS + " days"}</span></div></div>`;
+  $("#proofLede").textContent = `Screenshots, video and test records for each part. Media lives ${LIFE_DAYS} days. The line under a part shows the days left.`;
+  $("#foot").textContent = `Proof media on this map: ${shots.length} files, ${kb(bytes)}.` + (next ? ` The next one expires ${fmt(next.L.exp)}.` : "") + ` Text proof does not expire.`;
+})();
+
+// proof: accordion + viewer
+const PROOF_PARTS = [...PARTS.filter(p=>p.status==="done" && hasProof(p)), ...PARTS.filter(p=>p.status!=="done" && hasProof(p)).sort((a,b)=>liveShots(b).length-liveShots(a).length)];
+let pActive = PROOF_PARTS.length ? PROOF_PARTS[0].id : null, shotIx = 0;
+function mediaHtml(s, alt){
+  return isVideo(s) ? `<video src="${esc(safeUrl(s.src))}" controls muted playsinline preload="metadata"></video>`
+                    : `<img src="${esc(safeUrl(s.src))}" alt="${esc(alt)}">`;
+}
+function renderProof(){
+  if (!pActive) { document.getElementById("proof-sec").hidden = true; return; }
+  $("#plist").innerHTML = PROOF_PARTS.map(p=>{
+    const [st,cls] = STATUS[p.status]||STATUS.prog;
+    const sh = liveShots(p), open = p.id===pActive;
+    const count = sh.length ? `${sh.length} file${sh.length>1?"s":""}` : "test record";
+    const soon = sh.length ? sh.reduce((a,s)=>s.L.exp<a.L.exp?s:a) : null;
+    const lifeHtml = soon
+      ? `<div class="lifeline"><i style="width:${soon.L.frac*100}%"></i></div><div class="lifetxt">Captured ${fmt(soon.L.captured)} · expires ${fmt(soon.L.exp)}, ${soon.L.left} days left</div>`
+      : `<div class="lifetxt">Text proof does not expire.</div>`;
+    return `<div class="pitem" aria-expanded="${open}"><button data-p="${esc(p.id)}" aria-expanded="${open}">
+      <span class="pn">${esc(p.name)}</span><span class="pc">${count}</span><span class="arrow">${open?"↗":"→"}</span></button>
+      <div class="pbody"><p>${esc(p.summary)}</p><span class="chip ${cls}">${st}${p.done_on?" "+esc(p.done_on):""}</span>${lifeHtml}</div></div>`;
+  }).join("");
+  document.querySelectorAll(".pitem>button").forEach(b=>b.onclick=()=>{pActive=b.dataset.p;shotIx=0;renderProof()});
+  const p = PARTS.find(x=>x.id===pActive), sh = liveShots(p);
+  $("#vlinks").innerHTML = linksOf(p).map(l=>`<a href="${esc(safeUrl(l.url))}">${esc(l.label)}</a>`).join("");
+  if (sh.length) {
+    const s = sh[Math.min(shotIx, sh.length-1)];
+    $("#stage").innerHTML = mediaHtml(s, p.name + ": " + (s.caption||""));
+    $("#stage").onclick = isVideo(s) ? null : () => openLb(s.src);
+    $("#vmeta").innerHTML = `<b>${esc(p.name)}</b><span style="color:var(--muted)">${esc(s.caption||"")}</span><span class="exp">${shotIx+1} of ${sh.length} · expires ${fmt(s.L.exp)}</span>`;
+    $("#thumbs").innerHTML = sh.map((x,i)=> isVideo(x)
+      ? `<button class="vid" aria-label="${esc(x.caption||"video")}" aria-current="${i===shotIx}" data-i="${i}">▶</button>`
+      : `<button aria-label="${esc(x.caption||"screenshot")}" aria-current="${i===shotIx}" style="background-image:url('${esc(safeUrl(x.src))}')" data-i="${i}"></button>`).join("");
+    document.querySelectorAll("#thumbs button").forEach(b=>b.onclick=()=>{shotIx=+b.dataset.i;renderProof()});
+  } else {
+    $("#stage").onclick = null;
+    $("#stage").innerHTML = `<div class="textproof"><div class="mono">Test record</div><h3>${esc(testsOf(p))}</h3><div>${esc(p.summary)}</div></div>`;
+    $("#vmeta").innerHTML = `<b>${esc(p.name)}</b><span class="exp">Text proof · kept</span>`;
+    $("#thumbs").innerHTML = "";
+  }
+}
+
+// parts list
+const FILTERS = [["all","All"],["prog","In progress"],["stuck","Stuck"],["done","Done"],["idle","Not started"],["proof","Has proof"]];
+let pf = "all";
+function renderFilters(){
+  const show = FILTERS.filter(([k])=>k!=="stuck" || PARTS.some(p=>p.status==="stuck"));
+  $("#filters").innerHTML = show.map(([k,l])=>`<button data-f="${k}" aria-pressed="${pf===k&&!msFilter}">${l}</button>`).join("") + (msFilter?`<button aria-pressed="true" data-f="clear">${esc(msFilter)} ×</button>`:"");
+  document.querySelectorAll("#filters button").forEach(b=>b.onclick=()=>{ if(b.dataset.f!=="clear") pf=b.dataset.f; msFilter=null; renderMs(); renderParts(); });
+}
+function renderParts(){
+  $("#partsCount").textContent = PARTS.length + " parts";
+  renderFilters();
+  const keep = p => msFilter ? p.m===msFilter : (pf==="all" ? true : pf==="proof" ? !!hasProof(p) : p.status===pf);
+  let html = "";
+  MILESTONES.forEach(m=>{
+    const ps = PARTS.filter(p=>p.m===m.code && keep(p));
+    if(!ps.length) return;
+    html += `<div class="pg-h"><b>${esc(m.code)} ${esc(m.name)}</b><span>Exit: ${esc(m.exit)}</span></div>`;
+    ps.forEach((p,i)=>{
+      const [st,cls] = STATUS[p.status]||STATUS.prog;
+      const prog = p.status==="done" ? `<span class="pb"><span class="bar"><i style="width:100%;--fill:var(--ok)"></i></span>${esc(p.done_on||"")}</span>`
+        : p.t ? `<span class="pb"><span class="bar"><i style="width:${(p.d||0)/p.t*100}%${p.status==="stuck"?";--fill:var(--bad)":""}"></i></span>${p.d||0}/${p.t}${p.running?" · "+p.running+" running":""}</span>`
+        : `<span class="pb"><span class="bar"></span>–</span>`;
+      const n = liveShots(p).length;
+      const proof = n ? `<span class="pf has">${n} file${n>1?"s":""}</span>` : testsOf(p) ? `<span class="pf has">tests</span>` : `<span class="pf">no proof</span>`;
+      const lf = p.status==="done" ? esc(p.summary) : p.status==="stuck" ? `<b style="color:var(--bad);font-weight:500">Waits on:</b> ${esc(p.waiting_on||"")}` : `<b style="color:var(--text);font-weight:500">Left:</b> ${esc(p.left||"")}`;
+      html += `<button class="prow${p.changed?" changed":""}" data-p="${esc(p.id)}"><span class="ix">${esc(m.code)}.${i+1}</span><span class="nm">${esc(p.name)}${p.changed?'<i class="changed-dot" title="Changed since the last map"></i>':""}</span><span><span class="chip ${cls}">${st}</span></span>${prog}${proof}<span class="lf">${lf}</span></button>`;
+    });
+  });
+  $("#parts").innerHTML = html || `<div style="padding:24px;color:var(--muted)">No parts match.</div>`;
+  document.querySelectorAll(".prow").forEach(b=>b.onclick=()=>openDrawer(b.dataset.p));
+}
+
+// panels
+(function(){
+  const ps = D.panels || [];
+  if (!ps.length) return;
+  document.getElementById("panels-sec").hidden = false;
+  $("#panels").innerHTML = ps.map(x=>`<div class="panel"><h3>${esc(x.title)}</h3><ul>${(x.items||[]).map(i=>`<li>${esc(i)}</li>`).join("")}</ul></div>`).join("");
+})();
+
+// drawer
+let lastFocus=null;
+function openDrawer(id){
+  const p = PARTS.find(x=>x.id===id), m = MILESTONES.find(x=>x.code===p.m) || {code:p.m,name:"",exit:""};
+  const [st,cls] = STATUS[p.status]||STATUS.prog;
+  $("#drKicker").textContent = `Part · ${m.code} ${m.name}`;
+  const all = shotsOf(p);
+  const shots = all.length ? `<div class="mono" style="margin:22px 0 10px">Screenshots and video</div><div class="dr-shots">${all.map(s=> s.gone
+      ? `<figure><div class="gone">Expired ${fmt(s.L.exp)}</div><figcaption><span>${esc(s.caption||"")}</span></figcaption></figure>`
+      : `<figure>${isVideo(s) ? `<video src="${esc(safeUrl(s.src))}" controls muted playsinline preload="metadata"></video>` : `<img loading="lazy" src="${esc(safeUrl(s.src))}" alt="${esc(s.caption||"")}" data-src="${esc(safeUrl(s.src))}">`}<figcaption><span>${esc(s.caption||"")}</span><span>${s.L.left}d</span></figcaption></figure>`).join("")}</div>` : "";
+  const text = testsOf(p) ? `<div class="next" style="margin:0 0 6px"><div class="mono">Test record</div><p>${esc(testsOf(p))}</p></div>` : "";
+  const links = linksOf(p).length ? `<div class="links" style="margin:12px 0">${linksOf(p).map(l=>`<a href="${esc(safeUrl(l.url))}">${esc(l.label)}</a>`).join("")}</div>` : "";
+  const progress = p.status==="done" ? "Done " + (p.done_on||"") : p.t ? `${p.d||0} of ${p.t} items${p.running?", "+p.running+" running":""}` : "No items yet";
+  $("#drBody").innerHTML = `<span class="chip ${cls}">${st}${p.done_on?" "+esc(p.done_on):""}</span><h3 id="drTitle">${esc(p.name)}</h3><p>${esc(p.summary)}</p>
+    <div class="kv"><div>Progress</div><div>${esc(progress)}</div>
+    ${p.status==="stuck" ? `<div>Waits on</div><div>${esc(p.waiting_on||"")}</div>` : `<div>Left</div><div>${esc(p.status==="done"?"Nothing":p.left||"")}</div>`}
+    <div>Milestone</div><div>${esc(m.code)} ${esc(m.name)}. Exit: ${esc(m.exit)}</div></div>${text}${links}${shots}`;
+  document.querySelectorAll(".dr-shots img").forEach(i=>i.onclick=()=>openLb(i.dataset.src));
+  lastFocus=document.activeElement; document.body.classList.add("open"); $("#drClose").focus();
+}
+function closeDrawer(){ if(!document.body.classList.contains("open")) return; document.body.classList.remove("open"); lastFocus&&lastFocus.focus(); }
+$("#drClose").onclick=closeDrawer; $("#backdrop").onclick=closeDrawer;
+function openLb(src){$("#lbImg").src=safeUrl(src);$("#lb").classList.add("on")}
+$("#lb").onclick=()=>$("#lb").classList.remove("on");
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){ if($("#lb").classList.contains("on")) $("#lb").classList.remove("on"); else closeDrawer(); }});
+
+renderMs(); renderProof(); renderParts();
+</script>
+</body>
+</html>

@@ -241,29 +241,32 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .asks .icon{width:28px;height:28px}
 
 /* ---------- project-map: mini map ---------- */
-.mini{background:#17151f;color:#ecebf2;border-radius:18px;padding:18px;margin-top:16px}
-.mtrack{display:flex;align-items:center;margin:30px 8px 6px}
-.mnode{width:22px;height:22px;border-radius:999px;border:3px solid #6fe0b0;background:#6fe0b0;flex:none;position:relative;display:grid;place-items:center;color:#17151f}
-.mnode .icon{width:12px;height:12px;stroke-width:3.5}
-.mnode.here{background:#C5B5FE;border-color:#C5B5FE;box-shadow:0 0 0 6px #C5B5FE33}
-.mnode.here::after{content:"you are here";position:absolute;bottom:30px;left:50%;transform:translateX(-50%);background:#C5B5FE;color:#2a1868;font:700 11px var(--body);white-space:nowrap;padding:3px 8px;border-radius:999px}
-.mnode.next{background:transparent;border-color:#555068}
-.mline{flex:1;height:4px;background:#6fe0b0}
-.mline.dash{background:repeating-linear-gradient(90deg,#555068 0 6px,transparent 6px 12px)}
-.mlabels{display:flex;justify-content:space-between;font-size:11px;color:#a19db3}
-.mcards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}
-@media (max-width:480px){.mcards{grid-template-columns:1fr}}
-.mcard{border-radius:12px;padding:10px;background:#221f2d;border:1px solid #2e2b3a;font-size:13px;display:flex;flex-direction:column;gap:6px}
-.mcard b{font-size:14px}
-.badge{align-self:flex-start;font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px}
-.b-done{background:#1f4a37;color:#7fd8a8}.b-wip{background:#4a3a1a;color:#f2c46b}.b-stuck{background:#4a1f26;color:#ff8b98}
-.mcard.stuck{background:repeating-linear-gradient(135deg,#2a1d24 0 8px,#221f2d 8px 16px)}
-.bar{height:6px;border-radius:9px;background:#33303f}.bar i{display:block;height:100%;width:70%;border-radius:9px;background:#f2c46b}
-.proof{display:flex;gap:5px;color:#7fd8a8;font-size:12px;align-items:center;flex-wrap:wrap}
-.proof .icon{width:15px;height:15px}
-.call{margin-top:10px;border-radius:12px;background:#2b1d2a;border:1px solid #5a2a3c;padding:10px 12px;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.call .icon{color:#ff8b98;width:20px;height:20px}
-.call code{background:#3a2838;border-radius:6px;padding:1px 6px}
+.mini{background:#17151f;color:#ecebf2;border-radius:18px;padding:16px;margin-top:16px;display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:10px}
+@media (max-width:560px){.mini{grid-template-columns:1fr}}
+.mbox{background:#1f1c29;border:1px solid #2e2b3a;border-radius:12px;padding:12px}
+.mbox h4{margin:0 0 10px;font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:#a19db3}
+.ms{display:grid;grid-template-columns:28px minmax(0,1fr) 44px;gap:4px 8px;align-items:center;font-size:13px;margin-bottom:9px}
+.ms:last-child{margin-bottom:0}
+.ms code{font:11px var(--mono);color:#8a85a0}
+.ms .pc{text-align:right;font-weight:700;font-size:13px}
+.ms .seg{grid-column:2/4;display:flex;gap:3px;height:7px}
+.ms .seg i{flex:1;border-radius:9px;background:#33303f;overflow:hidden;position:relative}
+.ms .seg i b{position:absolute;inset:0 auto 0 0;background:#C5B5FE;border-radius:9px}
+.ms .seg i.d{background:#6fe0b0}.ms .seg i.s{background:#ff8b98}
+.ms .met{font-size:10.5px;color:#7fd8a8;margin-left:6px}
+.callc{font-size:13px}
+.callc p{margin:0 0 8px}
+.callc .opts{display:flex;flex-wrap:wrap;gap:6px}
+.callc .opts span{border:1px solid #4a4570;border-radius:999px;padding:3px 10px;font-size:12px}
+.callc .opts span.def{background:#C5B5FE;color:#2a1868;border-color:#C5B5FE;font-weight:700}
+.callc small{display:block;color:#8a85a0;margin-top:8px;font-size:11.5px}
+.shot{grid-column:1/-1;display:grid;grid-template-columns:92px minmax(0,1fr);gap:12px;align-items:center}
+.shot .thumb{height:58px;border-radius:8px;background:linear-gradient(135deg,#2e2b3a,#3b3650);border:1px solid #4a4570;display:grid;place-items:center;color:#a19db3}
+.shot .thumb .icon{width:22px;height:22px}
+.shot b{font-size:13px;display:block}
+.shot small{display:block;color:#8a85a0;font-size:11.5px}
+.life{display:block;height:4px;border-radius:9px;background:#33303f;margin:6px 0 4px;overflow:hidden}
+.life i{display:block;height:100%;width:60%;background:#6fe0b0;border-radius:9px}
 
 /* ---------- rules poster ---------- */
 .poster{background:#fffaf0;border:6px solid #a8742c;border-radius:10px;padding:22px 18px 18px;margin-top:20px;position:relative;transform:rotate(-1deg);box-shadow:0 10px 24px #4d350030}
@@ -784,26 +787,30 @@ workflow. Keep what already works. Skip what we do not need.</pre>
   <div>
     <h2>project-map</h2>
     <p class="tag">the board on the wall · "where are we?"</p>
-    <p class="what">A helper agent draws one page with your project's status. It looks like this:</p>
+    <p class="what">A helper agent draws one page per epic: how far each milestone is, what needs you, and proof of what works. It looks like this:</p>
 
-    <div class="mini" role="img" aria-label="Example of the page project-map draws: a milestone track with 'you are here' on Payments, three part cards (Done with 58 tests, In progress at 70 percent, Stuck waiting on live keys), and one open question with a default.">
-      <div class="mtrack">
-        <span class="mnode"><svg class="icon"><use href="#i-check"/></svg></span><span class="mline"></span>
-        <span class="mnode"><svg class="icon"><use href="#i-check"/></svg></span><span class="mline"></span>
-        <span class="mnode here"></span><span class="mline dash"></span>
-        <span class="mnode next"></span>
+    <div class="mini" role="img" aria-label="Example of the page project-map draws: three milestones with their own progress bars (Setup done, Payments 64 percent, Beta 20 percent), one open question with clickable answers and a default, and a proof screenshot with a bar for the days it has left.">
+      <div class="mbox">
+        <h4>Milestones</h4>
+        <div class="ms"><code>M0</code><span>Setup<span class="met">exit met</span></span><span class="pc">100%</span><span class="seg"><i class="d"></i><i class="d"></i><i class="d"></i></span></div>
+        <div class="ms"><code>M1</code><span>Payments</span><span class="pc">64%</span><span class="seg"><i class="d"></i><i><b style="width:70%"></b></i><i class="s"></i><i><b style="width:40%"></b></i></span></div>
+        <div class="ms"><code>M2</code><span>Beta</span><span class="pc">20%</span><span class="seg"><i><b style="width:45%"></b></i><i></i><i></i></span></div>
       </div>
-      <div class="mlabels"><span>Setup</span><span>Core</span><span>Payments</span><span>Beta</span></div>
-      <div class="mcards">
-        <div class="mcard"><b>Invoices</b><span class="badge b-done">Done</span><span class="proof"><svg class="icon"><use href="#i-flask"/></svg>58 tests <svg class="icon"><use href="#i-camera"/></svg>shots</span></div>
-        <div class="mcard"><b>PDF export</b><span class="badge b-wip">In progress</span><div class="bar"><i></i></div></div>
-        <div class="mcard stuck"><b>Checkout</b><span class="badge b-stuck">Stuck</span><span>waits on: live keys</span></div>
+      <div class="mbox callc">
+        <h4>Needs you · 1</h4>
+        <p><b>Go live this week?</b></p>
+        <div class="opts"><span>Yes</span><span class="def">Stay in test</span><span>Other…</span></div>
+        <small>Click to answer. Claude reads it on its next run.</small>
       </div>
-      <div class="call"><svg class="icon"><use href="#i-question"/></svg><b>Needs your call:</b> go live? <span>No reply → <code>stay in test</code></span></div>
+      <div class="mbox shot">
+        <span class="thumb"><svg class="icon"><use href="#i-camera"/></svg></span>
+        <span><b>Invoices: desktop, dark</b><span class="life"><i></i></span><small>58 tests pass · screenshot deletes itself in 18 days</small></span>
+      </div>
     </div>
 
     <div class="nums">
       <div class="num"><b><svg class="icon"><use href="#i-flask"/></svg></b><span>"done" needs proof: tests + screenshots</span></div>
+      <div class="num"><b>30</b><span>days, then screenshots delete themselves</span></div>
       <div class="num"><b><svg class="icon"><use href="#i-lock"/></svg></b><span>writes only in .project-map/</span></div>
     </div>
 
@@ -813,15 +820,15 @@ workflow. Keep what already works. Skip what we do not need.</pre>
         <li><svg class="icon"><use href="#i-flag"/></svg>After each milestone</li>
         <li><svg class="icon"><use href="#i-pin"/></svg>When you ask "where are we?"</li>
       </ul></div>
-      <div class="no"><h3>First time</h3><ul>
-        <li><svg class="icon"><use href="#i-palette"/></svg>Run it in front: it asks your colors</li>
-        <li><svg class="icon"><use href="#i-wrench"/></svg>Needs <code>jq</code> + <code>git</code></li>
+      <div class="no"><h3>Needs</h3><ul>
+        <li><svg class="icon"><use href="#i-wrench"/></svg><code>python3</code>, <code>ffmpeg</code>, <code>jq</code>, <code>git</code></li>
+        <li><svg class="icon"><use href="#i-map"/></svg>claude.ai artifacts, for the page and its buttons</li>
       </ul></div>
     </div>
     <div class="files">
       <a href="files/agents/project-map.md"><svg class="icon"><use href="#i-file"/></svg>project-map.md</a>
       <a href="files/hooks/project-map-guard.sh"><svg class="icon"><use href="#i-lock"/></svg>write guard hook</a>
-      <a href="files/agents/project-map-reference.png"><svg class="icon"><use href="#i-camera"/></svg>layout reference</a>
+      <a href="files/tools/project-map/"><svg class="icon"><use href="#i-folder"/></svg>page template + tools</a>
     </div>
   </div>
 </section>
@@ -868,9 +875,10 @@ workflow. Keep what already works. Skip what we do not need.</pre>
     <div class="term-bar"><i style="background:#ff6b6b"></i><i style="background:#f2c46b"></i><i style="background:#7fd8a8"></i><button class="copy" type="button" data-copy="cmd"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></div>
 <pre id="cmd"><span class="c"># download and unpack</span>
 curl -fsSL https://stack.yiin.dev/stack.tar.gz | tar -xz
-mkdir -p ~/.claude/skills ~/.claude/agents ~/.claude/hooks
+mkdir -p ~/.claude/skills ~/.claude/agents ~/.claude/hooks ~/.claude/tools
 cp -rf stack/skills/* ~/.claude/skills/
 cp -f stack/agents/* ~/.claude/agents/
+cp -rf stack/tools/project-map ~/.claude/tools/
 cp -f stack/hooks/project-map-guard.sh ~/.claude/hooks/
 chmod +x ~/.claude/hooks/project-map-guard.sh
 <span class="c"># simmer, plus the /cook-it and /cook-epic skills (needs bun)</span>
@@ -881,13 +889,13 @@ curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh
   <div class="needs">
     <a class="need" href="https://github.com/gastownhall/beads"><i style="background:var(--plan);color:var(--plan-ink)"><svg class="icon"><use href="#i-ticket"/></svg></i><span><span class="req">my pick</span><b>bd (beads)</b><small>Issue tracker. The skills call it. Your agent can swap in yours.</small></span></a>
     <a class="need" href="https://github.com/Yiin/simmer"><i style="background:var(--epic);color:var(--epic-ink)"><svg class="icon"><use href="#i-pot"/></svg></i><span><span class="req">my pick</span><b>simmer + bun</b><small>Runs /cook-epic and headless /orchestrate lanes on Claude Code, Codex, omp, Gemini CLI, Kimi, OpenCode or Crush. Installs /cook-it too.</small></span></a>
-    <a class="need" href="https://github.com/Yiin/pstack"><i style="background:var(--orch);color:var(--orch-ink)"><svg class="icon"><use href="#i-palette"/></svg></i><span><span class="req">optional</span><b>ui-ux-pro-max + unslop</b><small>Design and writing skills for project-map</small></span></a>
+    <a class="need" href="https://github.com/Yiin/pstack"><i style="background:var(--orch);color:var(--orch-ink)"><svg class="icon"><use href="#i-palette"/></svg></i><span><span class="req">optional</span><b>unslop</b><small>Writing rules for the map's words</small></span></a>
   </div>
   <div class="caption"><a href="files/">browse every file</a> · <a href="files/README.md">plain-text install notes</a></div>
 </section>
 
 </main>
-<footer>Shared October 2026 · the files change often, download again for the latest</footer>
+<footer>Updated November 2026 · the files change often, download again for the latest</footer>
 
 <script>
 (function(){

@@ -1,6 +1,6 @@
 # Agent stack
 
-How I run coding agents: one rules file, four skills, and one subagent.
+How I run coding agents: one rules file, four skills, and one subagent with its tools.
 The page at https://stack.yiin.dev explains each one and when to use it.
 
 ## Use it as a reference
@@ -25,11 +25,15 @@ To try my exact setup first, the steps below copy it.
 
 ```bash
 curl -fsSL https://stack.yiin.dev/stack.tar.gz | tar -xz
-mkdir -p ~/.claude/skills ~/.claude/agents ~/.claude/hooks
+mkdir -p ~/.claude/skills ~/.claude/agents ~/.claude/hooks ~/.claude/tools
 cp -rf stack/skills/* ~/.claude/skills/
 cp -f stack/agents/* ~/.claude/agents/
+cp -rf stack/tools/project-map ~/.claude/tools/
 cp -f stack/hooks/project-map-guard.sh ~/.claude/hooks/
 chmod +x ~/.claude/hooks/project-map-guard.sh
+# optional: delete map screenshots after 30 days, every day
+mkdir -p ~/.config/systemd/user && cp -f ~/.claude/tools/project-map/project-map-sweep.* ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now project-map-sweep.timer
 # simmer, plus the /cook-it and /cook-epic skills (needs bun)
 curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh | bash
 ```
@@ -51,9 +55,9 @@ The project-map subagent and its hook are Claude Code only.
   (`--harness claude|codex|omp|gemini|kimi|opencode|crush`), each on your own
   login or API key for that CLI. Its installer
   also links the `/cook-it` and `/cook-epic` skills, so they are not in this download.
-- `jq` and `git` for the project-map hook.
+- `jq` and `git` for the project-map hook. `python3` and `ffmpeg` (with AV1: libaom and SVT-AV1) for its tools.
+- The claude.ai artifacts connector in Claude Code, so project-map can publish the map as a private page with clickable calls. Without it the map stays a local file.
 - `/orchestrate` keeps your engines and projects in `~/.agents/orchestrate/` (set
   `ORCHESTRATE_HOME` to move it). It asks you once and writes the file. Headless lanes run
   through simmer, so any harness simmer supports can run a lane.
-- Optional: the `ui-ux-pro-max` skill (https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
-  and the `unslop` skill (https://github.com/Yiin/pstack) for project-map.
+- Optional: the `unslop` skill (https://github.com/Yiin/pstack) for the map's wording.

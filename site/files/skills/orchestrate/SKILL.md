@@ -128,14 +128,16 @@ Owner input is the only approval. Background events never approve anything.
 
 The project map (`.project-map/<slug>/index.html`, drawn by the `project-map` agent) is the owner's one progress dashboard for this orchestration. It shows running lanes, landed lanes, proof, open owner decisions and the next step. Each orchestration owns its own map, because other sessions may work in the same repo with maps of their own; `.project-map/index.html` is the hub that links them all. Pick the slug at session start (the epic id or a short kebab-case name), write it in your state, and pass `map: <slug>` in every map brief. In a harness without that agent, run it as a lane with the agent's definition as the brief. It writes only inside its own `.project-map/<slug>/` and the hub, so it cannot collide with lanes or with other sessions' maps. Run it:
 
-- At session start, before the first lane starts. The first run on a machine runs in the foreground so it can ask the owner about style.
+- At session start, before the first lane starts.
 - After every lane result that changes state, every owner decision, and every re-scope.
 - When 60 minutes pass with lanes running and no rerun.
 - When the owner asks "where are we?": answer from `.project-map/<slug>/state.json` and the map. If the map is older than the last commit on main, update it first.
 
-Give each run a brief: running lanes with their beads, worktrees, engines and logs; lanes landed since the last map; open owner decisions with options, a default and what you work on meanwhile; the next step. One map run at a time.
+Give each run a brief: running lanes with their beads, worktrees, engines and logs; lanes landed since the last map; open owner decisions with 2 to 4 options, a default and what you work on meanwhile; the next step. One map run at a time.
 
-Every "Do you need to act?" item in a report is also in the map under "Needs your call", with the same default.
+Every "Do you need to act?" item in a report is also in the map under "Needs you", with the same default.
+
+The owner can answer a call by clicking an option on the map. The click saves `answers/<call id>` in the artifact's database; nothing wakes you. So read the answers yourself: each time you wake, while the map has open calls (`open_calls` in `state.json`), run `db_list` on the map's `artifact_slug`, collection `answers`. An answer without `seen_at` is the owner's decision: record it, act on it, and mark it read with `db_write` (op `merge`, `ifVersion`, data `{seen_at, note}` where the note says in one line what happens next). Then pass it in the next map brief. While a call is open and no lane will wake you, check again every 20 minutes. Reading the database starts no watch.
 
 ## 8. Decisions
 

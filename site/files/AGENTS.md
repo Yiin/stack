@@ -190,10 +190,11 @@ Never wait with `until ! pgrep -f "<pattern>"`. The loop's own shell command lin
 
 ## Project Map
 
-The `project-map` agent draws `.project-map/index.html` in the project. The map is the shared answer to "where are we?".
+The `project-map` agent draws one map per epic or orchestration: `.project-map/<slug>/index.html` in the project. `.project-map/index.html` is a hub that links every map. The map is the shared answer to "where are we?". It shows each milestone's progress, what needs me, and proof of what works.
 
-- Before you work alone for a long stretch, start `project-map` in the background. If `~/.claude/agent-memory/project-map/MEMORY.md` has no `style:` line, run it in the foreground instead, so it can ask me.
+- Pick the slug once, at your first map run: the epic id, or a short kebab-case name of your work. Pass `map: <slug>` in every `project-map` prompt.
+- Before you work alone for a long stretch, start `project-map` in the background.
 - After each milestone, run `project-map` again to update the map.
-- When I ask "where are we?", answer from `.project-map/state.json` and the map. If the map is older than the last commit, update it first.
+- When I ask "where are we?", answer from `.project-map/<slug>/state.json` and the map. If the map is older than the last commit, update it first.
 - Do the map's suggested next step, unless I gave a different order.
-- When a choice needs me, send it to `project-map` with the options, a default, and what you will work on meanwhile. It goes in the map under "Needs your call". Do not wait for my answer. Continue with the default. If I answer later, change course.
+- When a choice needs me, send it to `project-map` with 2 to 4 options, a default, and what you will work on meanwhile. It goes in the map under "Needs you", as buttons I can click. Do not wait for my answer. Continue with the default. When I click, the answer lands in the map's database: the next map run reads it, or you read it with `db_list`. Then change course.
