@@ -33,8 +33,15 @@
 #
 # The lock lives on one host (RELEASE_LOCK_HOST, default this machine) in RELEASE_LOCK_DIR (default
 # ~/.local/state/orchestrate), outside any repo. On any other host this script runs itself there over SSH.
-# Per-project settings live in ~/.agents/orchestrate/projects/<project>/release-lock.conf (repo, branch,
-# ci_workflow, deploy_workflow). Every grant, refusal, push, bypass and release goes to <project>.release.log.
+# Per-project settings live in ~/.agents/orchestrate/projects/<project>/release-lock.conf. Every grant, refusal,
+# push, bypass and release goes to <project>.release.log. The ci key picks the CI check:
+#   ci=github (default)  repo, branch, ci_workflow, deploy_workflow; reads runs with gh run list.
+#   ci=forgejo           forgejo_url (http://host:port), repos (space-separated owner/name), branch. Forgejo 1.21
+#                        has no Actions runs API, so the check reads the combined commit status of each trunk
+#                        head: Actions writes one status per job, pending while it waits or runs. Busy when any
+#                        head is pending, or has no status yet and is younger than the deploy grace. Token:
+#                        FORGEJO_API_TOKEN from get-token on the lock host.
+#   ci=none              no CI check; the lock alone orders releases.
 #
 # Exit codes: 0 ok, 1 usage or error, 2 held by another holder, 3 CI or deploy running, 4 wait timed out,
 # 5 not the holder.
@@ -116,12 +123,13 @@ mutex_file="$state_dir/$project.release.mutex"
 log_file="$state_dir/$project.release.log"
 
 conf_file="$projects_dir/$project/release-lock.conf"
-repo=''; branch='main'; ci_workflow='ci.yml'; deploy_workflow='deploy.yml'
+repo=''; branch='main'; ci_workflow='ci.yml'; deploy_workflow='deploy.yml'; ci='github'; forgejo_url=''; repos=''
 if [ -f "$conf_file" ]; then
   while IFS='=' read -r key value; do
     case "$key" in
       repo) repo="$value" ;; branch) branch="$value" ;;
       ci_workflow) ci_workflow="$value" ;; deploy_workflow) deploy_workflow="$value" ;;
+      ci) ci="$value" ;; forgejo_url) forgejo_url="$value" ;; repos) repos="$value" ;;
     esac
   done < <(command grep -E '^[a-z_]+=' "$conf_file")
 fi
@@ -166,6 +174,36 @@ holder_is_dead() { [ "$(holder_session)" = gone ]; }
 
 # Prints why the trunk is busy, or nothing when the newest CI and deploy runs are complete.
 pipeline_busy() {
+  case "$ci" in
+    github) github_busy ;;
+    forgejo) forgejo_busy ;;
+    none) ;;
+    *) echo "unknown ci=$ci in $conf_file; cannot check CI" ;;
+  esac
+}
+
+forgejo_busy() {
+  [ -n "$forgejo_url" ] && [ -n "$repos" ] || { echo "ci=forgejo needs forgejo_url and repos in $conf_file"; return; }
+  local token r head sha_head status state total head_ts
+  token="$(get-token FORGEJO_API_TOKEN 2>/dev/null)" || { echo "no FORGEJO_API_TOKEN; cannot check CI"; return; }
+  for r in $repos; do
+    head="$(timeout 30 curl -sf -H "Authorization: token $token" "$forgejo_url/api/v1/repos/$r/branches/$branch" \
+      | jq -r '"\(.commit.id) \(.commit.timestamp)"')" || { echo "cannot read $r $branch"; return; }
+    read -r sha_head head_ts <<< "$head"
+    status="$(timeout 30 curl -sf -H "Authorization: token $token" "$forgejo_url/api/v1/repos/$r/commits/$sha_head/status" \
+      | jq -r '"\(.state) \(.total_count)"')" || { echo "cannot read $r status"; return; }
+    read -r state total <<< "$status"
+    if [ "$total" = 0 ]; then
+      if [ $(( $(now) - $(date -d "$head_ts" +%s) )) -lt "$deploy_start_grace" ]; then
+        echo "$r $branch head ${sha_head:0:9} has no CI status yet; its run may still start"; return
+      fi
+    elif [ "$state" = pending ]; then
+      echo "$r CI on ${sha_head:0:9} is running"; return
+    fi
+  done
+}
+
+github_busy() {
   [ -n "$repo" ] || { echo "no repo in $conf_file; cannot check CI"; return; }
   local ci deploy ci_status ci_updated deploy_status deploy_created
   ci="$(timeout 30 "$gh_bin" run list -R "$repo" --workflow "$ci_workflow" --branch "$branch" -L 1 \

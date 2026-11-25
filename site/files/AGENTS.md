@@ -145,6 +145,13 @@ CLI/TUI for managing `.local` dev domains via Caddy reverse proxy.
 - **DNS:** `*.local` resolves to `127.0.0.1` via dnsmasq (port 5354), routed by systemd-resolved. Config: `/etc/dnsmasq.d/local.conf`. Do NOT add `.local` entries to `/etc/hosts`.
 - **Details:** `~/.local/share/system-docs/dev-tools/caddy-local.md`, `~/.local/share/system-docs/network/dns.md`, system-management skill
 
+### dev-hosts
+
+Shared broker for heavy development and test jobs (test stacks, load tests, browser suites, builds), from every machine. It keeps the machine I work on usable: spare build boxes first, when no model is loaded on them and I have not reserved them, then my other machines, and the current machine always last. A small server with little memory sends its heavy jobs to the fleet and takes none.
+
+- **Before a job on another machine:** `dev-hosts pick` gives the hosts, and `dev-hosts lease` registers the job. Move the job when its lease is revoked. Never hard-code host names.
+- **systemd test containers:** never start a container that boots systemd with `--privileged`. It gets the host's `/dev/tty1`, starts a login prompt there, and kills my desktop session. Run it with `--cgroupns=private --tmpfs /run --tmpfs /run/lock --cap-add SYS_ADMIN`, and mask `getty.target` and `console-getty.service` in the image.
+
 ## Git
 
 `~/.config/git/config` wires difftastic in as a difftool. `git dft` shows structural diffs for humans. Plain `git diff` prints normal unified output, which is what tooling should parse. If a repo config sets `diff.external` and `git diff` prints structural output, pass `--no-ext-diff` to get unified output back.
@@ -190,11 +197,11 @@ Never wait with `until ! pgrep -f "<pattern>"`. The loop's own shell command lin
 
 ## Project Map
 
-The `project-map` agent draws one map per epic or orchestration: `.project-map/<slug>/index.html` in the project. `.project-map/index.html` is a hub that links every map. The map is the shared answer to "where are we?". It shows each milestone's progress, what needs me, and proof of what works.
+The `project-map` agent draws one map per session or orchestration: `.project-map/<slug>/index.html` in the project. Several sessions can share a repo, so never draw a map for the whole repo. `.project-map/index.html` is a hub that links every map. Your map is the shared answer to "where are we?". It shows each milestone's progress, what needs me, and proof of what works.
 
 - Pick the slug once, at your first map run: the epic id, or a short kebab-case name of your work. Pass `map: <slug>` in every `project-map` prompt.
-- Before you work alone for a long stretch, start `project-map` in the background.
+- Before you work alone for a long stretch, start `project-map` in the background. If `~/.claude/agent-memory/project-map/MEMORY.md` has no `style:` line, run it in the foreground instead, so it can ask me.
 - After each milestone, run `project-map` again to update the map.
-- When I ask "where are we?", answer from `.project-map/<slug>/state.json` and the map. If the map is older than the last commit, update it first.
+- When I ask "where are we?", answer from `.project-map/<slug>/state.json` and your map. If the map is older than the last commit, update it first.
 - Do the map's suggested next step, unless I gave a different order.
 - When a choice needs me, send it to `project-map` with 2 to 4 options, a default, and what you will work on meanwhile. It goes in the map under "Needs you", as buttons I can click. Do not wait for my answer. Continue with the default. When I click, the answer lands in the map's database: the next map run reads it, or you read it with `db_list`. Then change course.

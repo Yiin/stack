@@ -17,7 +17,7 @@ This skill holds the method only. It names no machine or project, and its only m
 - `owner.md`: the owner's engines and their start commands, the routing adjustments that hold across projects, how to notify the owner, and standing rules that hold across projects.
 - `routing-ledger.tsv`: one line per finished lane, for every project (section 4). Routing changes come from it.
 - `projects/<project>/README.md`: paths, tools, gates, release steps, traps and standing owner rules for one project.
-- `projects/<project>/lane-rules.md`: the rules every lane in that project follows, on top of the rules in the brief template, plus routing adjustments for that project only.
+- `projects/<project>/lane-rules.md`: the rules every lane in that project follows: the shared "Rules for every lane" block from `references/lane-rules-template.md`, then the project's own rules and its routing adjustments. Briefs point to it and do not repeat it.
 - `checks.sh` (optional): extra watchdog checks for every project, such as subscription limits (section 10).
 - `projects/<project>/checks.sh` (optional): extra watchdog checks for that project (section 10).
 
@@ -28,7 +28,7 @@ If `owner.md` is missing, ask the owner once: which engines can run lanes, which
 1. Find out which machine you are on (`hostname`). Never assume it.
 2. Read `owner.md`, the project README and its lane rules. Read `references/brief-template.md`, `references/lane-rules-template.md` and `references/routing-rules.md`. Skim the last lines of `routing-ledger.tsv` for this project.
 3. If the project uses bd: run `bd prime` and read the coordinator memories (`bd memories coordinator`). They hold the last session's state: what is live, which lanes ran, open owner decisions.
-4. Check production (live version), the main branch log since the last release, and `bin/worktree list` for lanes left from earlier sessions.
+4. Check production (live version), the `origin/<trunk>` log since the last release (run `git fetch` first, the local trunk can be stale), and `bin/worktree list` for lanes left from earlier sessions.
 5. Start the watchdog (section 10).
 6. Start the project map (section 7).
 7. Send the owner one report (section 12): what is live, what runs, what needs them.
@@ -43,9 +43,11 @@ A lane is one focused piece of work with one agent, one bead, one worktree and o
 - **Size.** One lane does one thing that one agent can finish and prove. Split a lane with two unrelated goals. Fold tiny related fixes into one lane.
 - **Parallel, but not on the same files.** Before you start a lane, list the running lanes and the files each one owns. Put that list in the brief. When two lanes must touch one shared file, give it to one lane and tell the other.
 - **Order.** Start what unblocks others first. Mark dependencies in bd, and name them in both briefs.
-- **Limit.** Your harness may cap how many agents run at once. Lanes must not spawn their own subagents. If you hit the cap, queue the lane and start it when a slot frees.
+- **Limit.** Your harness may cap how many agents run at once. Lanes start no subagents that edit files; a read-only search helper (an Explore-type subagent) for wide searches and log triage is fine. If you hit the cap, queue the lane and start it when a slot frees.
 - **Each lane ends** with: gates passed, work landed as the project's lane rules say, bead closed, follow-up beads filed, worktree removed, review page written, report sent. Only release lanes deploy.
-- **Cleanup.** After lanes land, run `bin/worktree clean` (dry run), then `bin/worktree clean --apply`. It removes only worktrees whose branch is in `origin/<trunk>`, with no uncommitted changes and no process in them. Anything it keeps is unlanded work: find out why before you delete it.
+- **Cleanup.** `bin/lane` retires a lane's worktree when the lane exits 0: `bin/worktree retire <dir>` removes it only when its branch is in `origin/<trunk>`, it has no uncommitted or untracked files, no ignored files outside regenerable folders (`node_modules`, `dist`, ...), and no process works in it. Otherwise it keeps the worktree and prints why. Pass `--keep-worktree` when the next phase reuses the worktree. After lanes land, also run `bin/worktree clean` (dry run), then `bin/worktree clean --apply`, for worktrees of lanes that failed or ran without `bin/lane`. It applies the same checks. Anything it keeps is unlanded work, and it must belong to a running lane or an open bead. Anything else is a dead end: check its changes against the trunk and the bead, then run `bin/worktree salvage <dir>`, write the salvage folder in the bead, and close the bead or file a follow-up. Do this at every handoff, not later. Also run `bin/worktree strays`: a worktree outside the root means a project rule or tool puts worktrees in the wrong place. Fix that rule or tool, then move or salvage the worktree.
+- **Job hosts.** Before a batch of lanes, run `dev-hosts plan --job <lane>=<light|cpu|ram> ... --owner <you> --rent` once (skill `use-dev-hosts`). Size each lane by its heaviest job. Put each lane's `host`, `ssh` and `slot` in its brief; a lane the plan could not place waits and gets planned again.
+- **Processing hosts.** Tools that run jobs on other machines keep their checkouts and caches under XDG folders: disposable job folders in `~/.cache/<project>/`, expensive shared caches in `~/.local/share/<project>/`. Never in `~/` or `~/Projects`. Each job removes its folder after collection.
 
 ## 4. Engines and effort: who runs a lane
 
@@ -67,7 +69,7 @@ Each lane runs on an engine: a harness, a model and an effort level, for example
 date	project	lane	role	harness	model	effort	attempt	outcome	cost	note
 ```
 
-`outcome` is `pass` (verified first time), `rework` (passed after your corrections), `fail` (rerun needed) or `stopped`. `attempt` counts runs of this lane, with 1 for the first. `cost` is the harness's reported cost or tokens, or `-`. When you weigh cost, use the measure `owner.md` names (for example the scarce subscription's usage), not list prices by default. Write the file with `printf` and tabs; create it with the header line when it is missing.
+`outcome` is `pass` (verified first time), `rework` (passed after your corrections), `fail` (rerun needed) or `stopped`. `attempt` counts runs of this lane, with 1 for the first. `cost` is one compact string with no tabs. For a headless lane, copy the `LANE <lane> usage ...` line that `bin/lane` prints, for example `out=463k cr=315M turns=212 peak=281k relays=1 fixes=1`: output tokens, cache read tokens, model calls, the largest context one call sent, relays at the context ceiling, and fix agents after a failed land. Otherwise the harness's reported cost or tokens, or `-`. The ledger keeps its 11 columns; readers that split on tabs keep working. When you weigh cost, use the measure `owner.md` names (for example the scarce subscription's usage), not list prices by default. Write the file with `printf` and tabs; create it with the header line when it is missing.
 
 **Adjust routing from the ledger.** Review the ledger at each efficiency review (section 10) and when a lane fails. Adjusting routing is your decision (section 8):
 
@@ -84,19 +86,47 @@ There are two ways to start a lane:
 - **Inside your harness,** when it has background subagents (Claude Code: the Agent tool). You can send these lanes corrections while they run.
 - **Headless, on any engine,** with the runner in this skill:
   ```
-  bin/lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>]
+  bin/lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>] [--keep-worktree]
+           [--host <ssh-host>] [--docker] [--context-ceiling <tokens>] [--max-relays <n>]
+           [--land-cmd "<command>"] [--lane-log <file>]
   ```
-  Start it as a background job that tells you when it exits (Claude Code: Bash with `run_in_background`; never a detached `&`, which sends no notice). The runner wraps `simmer lane`, which knows each harness CLI. It runs the lane as a transient systemd user unit when it can, so a memory-pressure reap of your shells does not kill it. It writes `<out-dir>/<lane>.last.md` (the final report) and `<lane>.log`, and prints the report when the lane exits. You cannot message a headless lane. To correct one, stop it and start a fresh run with a corrected brief that continues from the lane log.
+  Start it as a background job that tells you when it exits (Claude Code: Bash with `run_in_background`; never a detached `&`, which sends no notice). The runner wraps `simmer lane`, which knows each harness CLI. It runs the lane as a transient systemd user unit when it can, so a memory-pressure reap of your shells does not kill it. It writes `<out-dir>/<lane>.last.md` (the final report), `<lane>.log` and `<lane>.usage.json` (tokens, turns, peak context, relays; rewritten while the lane runs), and prints the exit code, the `LANE <lane> usage ...` line for the ledger, and the report when the lane exits. You cannot message a headless lane. To correct one, stop it and start a fresh run with a corrected brief that continues from the lane log. The runner asks `simmer lane --help` on the lane host first and stops with exit 2 when that simmer does not list the harness.
+
+  `--harness agy` runs Antigravity's `agy` CLI; `agy models` lists its models. agy model names end in an effort level, and `--effort` replaces that suffix. simmer runs the Claude Code guard hooks from `~/.claude/settings.json` (secret scrub, heavy-job guard) on agy's tool calls. A tool call a hook blocks is denied. A tool result that would need scrubbing stops the run with exit 75 before the model reads it, because agy cannot rewrite tool output; restart the lane from its lane log. Exit 78: no guard hooks were found, so the lane did not start. agy's usage counts only the main agent: tokens of its subagents are missing.
+
+  Two opt-in flags cut what a lane rereads. Turn them on per project in its lane rules or README; projects without them keep today's behaviour.
+  - `--context-ceiling <tokens>` (Claude and agy lanes): when one model call's context passes the ceiling, simmer asks the agent at its next tool boundary to commit, write a handoff into its lane log and stop; a fresh agent then continues from the brief and that handoff. An agent that ignores the request for 20 turns is stopped right after a tool call. `--max-relays` caps relays (default 3); the last agent runs without a ceiling. Peak context can pass the ceiling by one tool output. A tiny Claude Code session already starts near 55k tokens, so set the ceiling well above that (for example 150000).
+  - `--land-cmd "<command>"`: the agent does not land. It ends its report with the line `READY-TO-LAND`, and the runner runs the land command in the worktree with no model watching, so no model rereads its context while gates and the land lock run. The command follows the land contract: at most 30 lines on stdout, the last one `LAND-RESULT <landed|gate-failed|conflict|infra|nothing> <summary-file>`; exit 0 landed, 1 a gate failed, 2 a rebase conflict, 3 infrastructure, 4 nothing to land. On 1 or 2 a fresh fix agent gets a short brief (the brief's Goal paragraph, the lane log, the land summary and `git diff --stat`), may fix and commit, and says `READY-TO-LAND` again; at most 2 fix rounds. On 3 the runner retries once after a pause. The land result and each fix agent's report go at the end of `<lane>.last.md`. Exit codes: 0 landed or nothing to land; 1, 2 or 3 the last land failure; 6 a report without `READY-TO-LAND`. Write the brief's Delivery and Report sections for this mode (`references/brief-template.md`).
 
   **Local mode** (no `--host`): the lane runs on your machine, in `--worktree` there. Stop one with `systemctl --user stop lane-<lane>`. When the project uses volatile processing hosts, keep every lane harness and worktree on its durable host. Send heavy commands through the project's leased remote job tool. Keep the watchdog local too. Processing hosts must never hold the only copy of lane work or results.
 
   **Remote mode** (`--host <ssh-host>`): the lane runs on another machine for a special case. Prefer local lane harnesses on the durable host when a project has a remote processing tool. `--worktree` is then a path on that host. The runner copies the brief to the host's lane folder (`~/.local/state/orchestrate/lanes/<lane>.brief.md`), starts `simmer lane` there as user unit `lane-<lane>` with the host's login-shell PATH, and polls it over SSH every 30 s. A dropped SSH connection does not stop the lane; the runner keeps polling. When the lane ends, it copies `<lane>.last.md` and `<lane>.log` back to `--out-dir` and prints the report, as in local mode. The exit code survives in `<lane>.rc` on the host. Stop one with `ssh <host> systemctl --user stop lane-<lane>`. The host needs SSH without a password prompt, simmer, the harness CLI with a live login, and a lingering systemd user session (`loginctl enable-linger`). Any agent your own harness starts runs on your machine, so a lane that must run on the build host goes through remote mode, also for your strongest engine (for example `--harness claude --model opus`). Review folders a remote lane writes stay on the host: fetch them with rsync before you publish them.
 
+  **Lanes on build boxes** (container mode: `--host <build-host>`, or `--host spark` to let `dev-hosts pick --arch arm64` choose a free arm64 box): use it to keep the coordinator's machine free. A box lane costs that machine only its runner, about 15 MB. A host is in container mode when it has `~/.config/orchestrate/lane-host.env` with `LANE_IMAGE`. The agent runs in a pinned container (`orchestrate-lane:<hash>`), limited to the broker's job memory. All other flags work as in local mode, and `--worktree` stays a worktree on your machine.
+  - What the runner does: it pushes the branch to a clone on the box and mirrors read-only every file and folder the brief names, the skills, and `~/.claude/CLAUDE.md`. Every 30 s it fetches the lane's commits back into the worktree, copies `<lane>.log` and `<lane>.usage.json` to `--out-dir` for the watchdog, and merges `--lane-log` both ways, so notes you append there reach the lane. The report, the `LANE ... usage` line, relays and the exit codes are as in local mode.
+  - By default the container has no Docker socket. The runner runs the land command and `worktree retire` on your machine.
+  - Pass `--docker` for a project whose gates need Docker. This puts Docker and mise on PATH. The lane uses the box's Docker socket and loopback. The clone, scratch and cache have the same paths on the host. Remove the containers, networks and volumes you start before reporting.
+  - Docker socket access grants root-equivalent control of the box. Use `--docker` for trusted lanes only. Docker lanes use direct network access for the issue tracker. The runner skips the host's tracker SSH forward.
+  - With `--docker --land-cmd`, the runner leases a second unit on the same box after the agent exits. The land command runs there in a separate checkout. It can use the box's deploy key. The container has no key mount. Write land details to `$LANE_LAND_SUMMARY` and name it in `LAND-RESULT`. The runner copies it to `--out-dir`.
+  - `bin/lane-land-example` is a land command for a project that gates with `mise run check` and a pre-push hook: pass `--land-cmd "$(cat <skill>/bin/lane-land-example)"`. It fetches main, rebases, runs the check, and pushes with the pre-push hook. The coordinator keeps its worktree if the rebase changed its commit IDs. The runner owns both leases.
+  - Credentials: the box has its own harness login. Copy it there without its refresh token, so a box never rotates your main machine's tokens. An agy lane gets a copy of agy's login files for its run only. The issue tracker goes through an `ssh -R` forward that the runner holds (`LANE_FORWARD`), with only that server's credentials. The runner mounts neither the token store nor a Git key.
+  - Lanes that need secrets (deploys, provisioning, live servers) stay on the coordinator's machine.
+  - The mirror never copies `~/.ssh`, `~/.config`, `~/.claude`, login files, keyrings or shell history, and skips folders under `~/.cache`. It prints `mirror: skipped <path>: <reason>` for each one. Name a file the agent must read by its own path, not its folder.
+  - Leases: the runner holds a dev-hosts lease on the box for the lane's unit. Inside the container, `dev-hosts` only says that the lane already holds the lease, so builds and tests run in the container, one at a time. When the owner reserves the box, the runner stops the lane, keeps its commits on the branch in your worktree, and exits 7. Start it again later or on another box: the new agent continues from the lane log.
+  - SendMessage cannot reach a box lane. Append to its lane log.
+  - Watch box lanes with the local watchdog, without `LANE_HOST`: set `LOG_DIR` to the lanes' `--out-dir`, where the runner copies `<lane>.log` and `<lane>.usage.json`.
+  - Start the runner as you start a local one: with `run_in_background` and the longest timeout (7200000 ms). The default 10-minute background limit kills the runner. The lane goes on in its unit, but the runner then cannot land it or write the report.
+  - Stop one with `ssh <build-host> systemctl --user stop lane-<lane>`.
+
 Before the first headless lane on a new machine, host or engine, probe it once with a tiny no-edit brief that checks hostname, bd, git and network access. An engine login can die mid-run and fail every lane on it at once: probe before you relaunch, and tell the owner when only they can fix the login.
 
 ## 5. The brief
 
-Use `references/brief-template.md`. A brief is complete enough that an agent with no memory of this conversation does the right thing, on any engine. It always includes the "Rules for every lane" block from the template, unchanged, plus a pointer to the project lane rules, plus any block `owner.md` says to paste into briefs for the lane's role.
+Use `references/brief-template.md`. A brief is complete enough that an agent with no memory of this conversation does the right thing, on any engine, together with the project lane rules it points to. It is also lean: a lane rereads the brief and everything it reads on every turn.
+
+- The shared "Rules for every lane" block lives once in the project lane rules (`references/lane-rules-template.md`). The brief points to it and does not repeat it. If the project's lane rules lack the block, copy it there before the next lane starts. Add any block `owner.md` says to paste into briefs for the lane's role.
+- "Read first" names the two or three doc sections the task needs, not whole design folders. Name only the skills the task needs.
+- Waiting and gates: the rules block tells lanes to send command output to a file and read at most 30 lines plus the failures, and to wait inside one shell call. When you start a lane with `--land-cmd`, its brief says READY-TO-LAND instead of "land it yourself".
 
 - For a code-review lane, start from `references/review-brief.md`.
 - Give the outcome and the bar, not the implementation. Name likely causes as "likely", and ask the agent to confirm.
@@ -113,7 +143,7 @@ Every lane result arrives as a notification. Handle each one the same way:
 1. **Interim message** ("waiting for the run"): no owner report. If one lane sends many interim stops, tell it to wait inside one shell call.
 2. **Final report:** read it fully. Check the claims that matter (section 9). Then:
    - Restart the watchdog without the finished lane.
-   - Append the lane's line to the routing ledger, and rerun a failed lane one step up (section 4).
+   - Append the lane's line to the routing ledger, with the `LANE <lane> usage ...` string as its cost, and rerun a failed lane one step up (section 4). With `--land-cmd`, read the "Land (bin/lane)" section at the end of the report: it says whether the work landed.
    - Decide every question inside your authority (section 8). Record each decision as a bd comment.
    - Start follow-up lanes for what must happen next.
    - Notice what is now ready to release.
@@ -121,6 +151,7 @@ Every lane result arrives as a notification. Handle each one the same way:
    - Report to the owner (section 12), only if something changed that they would care about.
 3. **Owner message mid-work:** act on it in the same turn. Record the owner's words verbatim on a bead. Change running lanes (message them, or stop and restart headless ones), and say what you changed.
 4. **Background events** (a shell exits, the watchdog restarts, a deploy watcher starts): handle them. Do not report them, unless the owner would care.
+5. **"live updates for artifact ... was stopped":** noise. The harness drops an artifact watch and wakes you for nothing. Stop that watch (`ArtifactComments`, action `watch`, `on: false`, the artifact URL), do not restart it, and end the turn with no report. Watches exist only because a main session published an artifact; see section 7 and section 12.
 
 Owner input is the only approval. Background events never approve anything.
 
@@ -135,6 +166,8 @@ The project map (`.project-map/<slug>/index.html`, drawn by the `project-map` ag
 
 Give each run a brief: running lanes with their beads, worktrees, engines and logs; lanes landed since the last map; open owner decisions with 2 to 4 options, a default and what you work on meanwhile; the next step. One map run at a time.
 
+The `project-map` agent publishes the map. Never publish it yourself, also not when its link broke or its publish failed: run the agent again with the fix in the brief. A publish from your own session starts a background artifact watch, and every drop of that watch wakes you for a full turn with nothing to do. A subagent holds no watch.
+
 Every "Do you need to act?" item in a report is also in the map under "Needs you", with the same default.
 
 The owner can answer a call by clicking an option on the map. The click saves `answers/<call id>` in the artifact's database; nothing wakes you. So read the answers yourself: each time you wake, while the map has open calls (`open_calls` in `state.json`), run `db_list` on the map's `artifact_slug`, collection `answers`. An answer without `seen_at` is the owner's decision: record it, act on it, and mark it read with `db_write` (op `merge`, `ifVersion`, data `{seen_at, note}` where the note says in one line what happens next). Then pass it in the next map brief. While a call is open and no lane will wake you, check again every 20 minutes. Reading the database starts no watch.
@@ -144,6 +177,7 @@ The owner can answer a call by clicking an option on the map. The click saves `a
 - **Yours:** technical choices, scope splits, priorities between lanes, accepting a lane's recommendation, and anything the owner made you the authority on. Decide, record it as a bd comment ("Coordinator decision <date>: ..."), and tell the owner in one bullet. Do not ask the owner to make decisions you can make.
 - **Routing too:** adjust routing from the ledger without asking (section 4). Never override a routing rule the owner wrote.
 - **The owner's:** spending money, taste calls on look and feel the owner has not settled, changes to the owner's own rules, anything outward-facing or irreversible, and anything that touches another person. Ask with your harness's question tool when the answer changes what you do next: options with trade-offs, your recommendation first. Otherwise put the decision in the report under "Do you need to act?" with a default, send it to the map, and continue with the default.
+- **Council for the owner's reversible calls:** when an owner decision blocks work, is reversible, and is not money, outward-facing, the owner's own rules, or another person, use the `council` skill instead of your own default. Act on its result, record it, and report it as a veto-able decision under "When you have time". The four excluded classes stay with the owner. The council may write them a recommendation, but you do not act on it.
 - Every decision you put to the owner stands alone: what the thing is, why it matters, the options, your default and when you act on it. The owner must be able to answer it with no memory of earlier reports.
 - Keep a running list of open owner items. Repeat each one in full until it is answered. Drop it as soon as the owner answers, record the answer, and update the map.
 - When an owner answer is short or ambiguous, act on the most likely reading, and state your reading in one line.
@@ -173,6 +207,7 @@ Run `bin/watchdog` from this skill as a background job. It loops every 60 s and 
 - Low RAM.
 - Anything the project's `checks.sh` prints (long test containers, stuck build processes, agent windows on the owner's desktop).
 - Anything the owner's `$ORCHESTRATE_HOME/checks.sh` prints. The watchdog runs it on its own; act on its findings as `owner.md` says.
+- With `PEAK_CONTEXT=<tokens>`: a lane whose peak context passes that size, once per lane. It reads the `<lane>.usage.json` that `bin/lane` keeps current in `LOG_DIR` (or, with `LANE_HOST`, in the host's lane folder). A lane far over the ceiling without `--context-ceiling` is a candidate for a relay next time; one with it that still grows means the agent ignores the relay rule.
 
 Restart it with the current lane list (`LANES="a b c"`) every time a lane starts or ends. For local lanes, omit `LANE_HOST` and set `WT_ROOT` to `~/.local/share/agent-worktrees/<repo>`. For lanes in remote mode, set `LANE_HOST=<ssh-host>` and give `WT_ROOT` as a path on that host: the lane checks then run there in one SSH call per loop, files in the host's lane folder count as activity, and an unreachable host or low RAM on it is a finding. Run one watchdog per lane host. When it fires, check the case, act or note it, and restart it. Take a lane off the list while it runs a known long test. The header of `bin/watchdog` lists its settings.
 
@@ -185,6 +220,7 @@ Review efficiency yourself, all the time, and fix what you find:
 - Duplicate work between lanes.
 
 - Engines that cost more than the work needs, or fail it: read the ledger and adjust routing (section 4).
+- Context cost: read the usage numbers in the ledger's cost field and in `<lane>.usage.json`. Cache read (`cr`) grows with turns times context, so a lane with high `cr` either ran many turns at a large context (turn on `--context-ceiling`, trim its "Read first", send command output to files) or spent turns waiting (gate reruns, the land queue: use `--land-cmd`). Compare `turns`, `peak` and `cr` across lanes of one role, and turn a repeat cause into a lane rule.
 
 When you find a pattern that is specific to the project, add a rule to its lane rules. When it holds for every project, propose a change to this skill's brief template to the owner.
 
@@ -230,7 +266,7 @@ Rules:
 - **Report only on change.** No report for interim lane messages or background events.
 - Follow the owner's writing rules if they have any. Otherwise: verdict first, short sentences, active voice, no hype, no time estimates (describe scope instead).
 - Ping the owner with the notifier in `owner.md` for milestones: a release live, a review ready, a decision needed.
-- Review pages: publish each as a shareable page if your harness can (Claude Code: an Artifact). Otherwise give the owner the file path. Link the map first, then review pages the owner needs.
+- Review pages: publish each as a shareable page if your harness can (Claude Code: an Artifact). Publish from a subagent, not from your own session. If you publish yourself, stop the watch right after (`ArtifactComments`, action `watch`, `on: false`, the URL). Otherwise give the owner the file path. Link the map first, then review pages the owner needs.
 
 ## 13. Tracking and memory
 

@@ -1,9 +1,32 @@
 #!/usr/bin/env bash
 # Run one lane headless on any engine, through `simmer lane`.
-# Usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>] [--host <ssh-host>]
-# Writes <out-dir>/<lane>.last.md (final report) and <out-dir>/<lane>.log, then prints the exit code and the report.
+# Usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>]
+#             [--host <ssh-host>] [--docker] [--keep-worktree] [--context-ceiling <tokens>] [--max-relays <n>]
+#             [--land-cmd "<command>"] [--lane-log <file>] [--land-retry-pause <seconds>]
+# Writes <out-dir>/<lane>.last.md (final report), <out-dir>/<lane>.log and <out-dir>/<lane>.usage.json
+# (simmer's usage: tokens, turns, peak context, relays), then prints the exit code, a usage line for the
+# routing ledger's cost field ("LANE <lane> usage out=463k cr=315M turns=212 peak=281k relays=1") and the report.
+# After a lane exits 0, the runner runs `worktree retire` on its worktree: it removes the worktree only when its
+# branch is landed and nothing in it is unsaved or in use, and keeps it otherwise. --keep-worktree skips this,
+# for a worktree the next phase reuses. A lane that exits nonzero always keeps its worktree.
 # With a systemd user session, the lane runs as transient unit lane-<lane>, so a memory-pressure
 # reap of the caller's shells cannot kill it. Stop one with: systemctl --user stop lane-<lane>
+#
+# Opt-in efficiency flags (off by default; each keeps today's behaviour when left out):
+# --context-ceiling <tokens> and --max-relays <n> go to `simmer lane`: when a turn's context passes the
+#   ceiling, the agent writes a handoff and a fresh agent continues from the brief and that handoff
+#   (Claude only; at most --max-relays relays, default 3).
+# --land-cmd "<command>": the agent ends its report with a line READY-TO-LAND instead of landing. The runner
+#   then runs the command in the worktree, with no model watching (unit lane-<lane>-land). The command follows
+#   the land contract: at most 30 lines on stdout, the last one `LAND-RESULT <word> <summary-file>`; exit
+#   0 landed, 1 a gate failed, 2 a rebase conflict, 3 infrastructure, 4 nothing to land.
+#   0 and 4: done. 1 and 2: a fresh fix agent gets a short brief (the lane goal, the lane log path, the land
+#   summary, the branch's diff stat) and may fix, commit and say READY-TO-LAND again; at most 2 fix rounds.
+#   3: one retry after --land-retry-pause seconds (default 120). The land result goes at the end of
+#   <lane>.last.md, with each fix agent's report. --lane-log names the lane log for fix agents
+#   (default <out-dir>/<lane>.log.md when it exists).
+#   Exit codes with --land-cmd: 0 landed or nothing to land; 1, 2 or 3 the land command's last failure;
+#   6 a report without READY-TO-LAND (nothing was landed); else the agent's own exit code.
 #
 # Default local mode keeps the harness and worktree on the durable host.
 # Project tools send heavy commands to volatile processing hosts.
@@ -11,52 +34,284 @@
 # The runner copies the brief to the host's lane folder (~/.local/state/orchestrate/lanes/ there), starts
 # `simmer lane` there as transient user unit lane-<lane> under the host's login-shell PATH, and polls it over
 # SSH every 30 s. A dropped SSH connection does not stop the lane. When the lane ends, the runner copies
-# <lane>.last.md and <lane>.log back to --out-dir. Stop one with: ssh <host> systemctl --user stop lane-<lane>
+# <lane>.last.md, <lane>.log and <lane>.usage.json back to --out-dir. A land command runs on the host too.
+# Stop one with: ssh <host> systemctl --user stop lane-<lane>
+#
+# Container mode (--host <h> where <h> has ~/.config/orchestrate/lane-host.env with LANE_IMAGE, such as a Spark;
+#   --host spark lets `dev-hosts pick --arch arm64` choose one): the agent runs in container lane-<lane> on
+#   the host, and --worktree is the worktree HERE. The runner pushes the branch to a clone on the host
+#   (~/.local/state/orchestrate/lanes/<lane>/repo), mirrors the files the brief names read-only, holds a
+#   dev-hosts lease on the host for the lane's unit, and every 30 s fetches the lane's commits back
+#   (refs/lane-box/<lane>), copies <lane>.log and <lane>.usage.json here, and syncs --lane-log both ways.
+#   --docker gives the container the host socket and network. In this mode the land command runs in a
+#   separate checkout on the host, with its own lease. Retire runs here. bin/lane-container is the host side.
+#   Exit 7: dev-hosts revoked the lease (the owner reserved the host). The lane's commits are on its
+#   branch here; start it again from the lane log, on another host or later.
 # The host needs simmer, the harness CLI with a live login, and a systemd user session (loginctl enable-linger).
 # The body is one function, so bash parses it whole before it runs: editing this file cannot break running lanes.
+# Still replace it with a new file and `mv -f`, never edit it in place.
 main() {
   lane="${1:?usage: lane <lane> <brief-file> --worktree <dir> --out-dir <dir> --harness <h> [--model <m>] [--effort <e>] [--host <ssh-host>]}"
   brief="${2:?brief file}"; shift 2
-  worktree=""; out_dir=""; host=""; pass=()
+  worktree=""; out_dir=""; host=""; keep_worktree=""; pass=(); land_cmd=""; lane_log=""; retry_pause=120
+  helper="$(dirname "$(readlink -f "$0")")/worktree"; box=""; box_docker=""; unit_wd=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --worktree) worktree="${2:?}"; shift 2 ;;
       --out-dir) out_dir="${2:?}"; shift 2 ;;
       --host) host="${2:?}"; shift 2 ;;
-      --harness|--model|--effort) pass+=("$1" "${2:?}"); shift 2 ;;
+      --docker) box_docker=1; shift ;;
+      --keep-worktree) keep_worktree=1; shift ;;
+      --harness|--model|--effort|--context-ceiling|--max-relays) pass+=("$1" "${2:?}"); shift 2 ;;
+      --land-cmd) land_cmd="${2:?}"; shift 2 ;;
+      --lane-log) lane_log="${2:?}"; shift 2 ;;
+      --land-retry-pause) retry_pause="${2:?}"; shift 2 ;;
       *) echo "lane: unknown option $1" >&2; exit 2 ;;
     esac
   done
   [[ "$lane" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "LANE $lane: name must match [A-Za-z0-9._-]+" >&2; exit 2; }
   [ -n "$out_dir" ] || { echo "LANE $lane: --out-dir missing" >&2; exit 2; }
   [ -f "$brief" ] || { echo "LANE $lane: brief '$brief' missing" >&2; exit 2; }
+  [[ "$retry_pause" =~ ^[0-9]+$ ]] || { echo "LANE $lane: --land-retry-pause must be whole seconds" >&2; exit 2; }
   mkdir -p "$out_dir"
   brief="$(readlink -f "$brief")"; out_dir="$(readlink -f "$out_dir")"
   report="$out_dir/$lane.last.md"; log="$out_dir/$lane.log"
+  [ -n "$lane_log" ] || { [ -f "$out_dir/$lane.log.md" ] && lane_log="$out_dir/$lane.log.md"; }
+  rm -f "$out_dir/$lane.usage.json" "$out_dir/$lane".fix*.usage.json
   if [ -n "$host" ]; then
-    remote_lane
+    [ "$host" = spark ] && pick_spark
+    home="$(on_host printenv HOME)" || { echo "LANE $lane: host $host unreachable" >&2; exit 2; }
+    box_conf="$(on_host cat "$home/.config/orchestrate/lane-host.env" 2>/dev/null)"
+    if grep -q '^LANE_IMAGE=.' <<< "$box_conf"; then
+      box_setup
+    elif [ -n "$box_docker" ]; then
+      echo "LANE $lane: --docker requires a container image on $host" >&2; exit 2
+    else
+      remote_setup
+    fi
   else
-    local_lane
+    [ -z "$box_docker" ] || { echo "LANE $lane: --docker requires --host" >&2; exit 2; }
+    [ -n "$worktree" ] && [ -d "$worktree" ] || { echo "LANE $lane: worktree '$worktree' missing" >&2; exit 2; }
+    worktree="$(readlink -f "$worktree")"
+    check_simmer "$(simmer lane --help 2>/dev/null)"
   fi
+  run_agent "$lane" "$brief"
+  rc=$?
+  [ "$rc" = 0 ] && [ -n "$land_cmd" ] && { land_flow; rc=$?; }
+  if [ "$rc" = 0 ] && [ -z "$keep_worktree" ]; then retire; fi
   echo "LANE $lane exit $rc"
+  usage_line
   { tail -c 6000 "$report" 2>/dev/null || tail -n 30 "$log"; } && echo
+  return "$rc"
 }
 
-local_lane() {
-  [ -n "$worktree" ] && [ -d "$worktree" ] || { echo "LANE $lane: worktree '$worktree' missing" >&2; exit 2; }
-  worktree="$(readlink -f "$worktree")"
-  cmd=(simmer lane "$brief" --worktree "$worktree" --out "$report" "${pass[@]}")
+# Runs one agent: `simmer lane <brief>` writing <out-dir>/<name>.last.md, .log and .usage.json. Returns its exit code.
+run_agent() {
+  local name="$1" agent_brief="$2"
+  if [ -n "$box" ]; then box_agent "$name" "$agent_brief"
+  elif [ -n "$host" ]; then remote_agent "$name" "$agent_brief"; else local_agent "$name" "$agent_brief"; fi
+}
+
+local_agent() {
+  local name="$1" agent_brief="$2" cmd
+  cmd=(simmer lane "$agent_brief" --worktree "$worktree" --out "$out_dir/$name.last.md")
+  [ -n "$usage_flag" ] && cmd+=(--usage-out "$out_dir/$name.usage.json")
+  cmd+=("${pass[@]}")
+  in_unit "lane-$name" "$out_dir/$name.log" "" -- "${cmd[@]}"
+}
+
+# in_unit <unit> <stdout-file> <stderr-file or ""> -- <command...>: runs the command in the worktree as a
+# transient systemd user unit when there is a user session, else in this shell. stderr goes to its own file,
+# or with "" to the stdout file. Returns the command's exit code.
+# systemd expands $NAME and ${...} in the command line, so the wrappers use only $0, $1, $@ and $?.
+in_unit() {
+  local unit="$1" out="$2" err="$3" wrap args; shift 4
+  if [ -n "$err" ]; then
+    wrap='exec 2> "$1"; shift; "$@" > "$0"'; args=("$out" "$err" "$@")
+  else
+    wrap='"$@" > "$0" 2>&1'; args=("$out" "$@")
+  fi
   if systemctl --user show-environment >/dev/null 2>&1; then
-    systemd-run --user --wait --collect --quiet --unit="lane-$lane" \
+    systemd-run --user --wait --collect --quiet --unit="$unit" \
       --working-directory="$worktree" \
       --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
       --setenv=SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" --setenv=LANG="${LANG:-C.UTF-8}" \
       ${CLAUDE_CONFIG_DIR:+--setenv=CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR"} \
-      /usr/bin/env bash -c '"$@" > "$0" 2>&1' "$log" "${cmd[@]}"
+      /usr/bin/env bash -c "$wrap" "${args[@]}"
   else
-    (cd "$worktree" && "${cmd[@]}") > "$log" 2>&1
+    (cd "$worktree" && bash -c "$wrap" "${args[@]}")
   fi
-  rc=$?
+}
+
+retire() {
+  if [ -n "$host" ] && [ -z "$box" ]; then
+    local rhelper="$home/.agents/skills/orchestrate/bin/worktree"
+    if on_host test -f "$rhelper"; then
+      echo "LANE $lane: worktree on $host $(on_host bash "$rhelper" retire "$worktree" 2>&1)" >&2
+    else
+      echo "LANE $lane: worktree on $host kept ($host has no $rhelper)" >&2
+    fi
+  else
+    # bash, not the executable bit: Syncthing with ignorePerms resets the mode on every edit.
+    echo "LANE $lane: worktree $(bash "$helper" retire "$worktree" 2>&1)" >&2
+  fi
+}
+
+# True when the report has a line READY-TO-LAND (markdown marks and spaces around it are fine).
+ready_to_land() {
+  [ -f "$1" ] && sed 's/[`*_[:space:]]//g' "$1" | grep -qx 'READY-TO-LAND'
+}
+
+# Land loop: run the land command, start fix agents on gate failures and conflicts, retry infrastructure once.
+land_flow() {
+  local attempt=0 fixes=0 retried=0 land_rc word summary out final notes=() box_conflict_fix=""
+  if ! ready_to_land "$report"; then
+    printf '\n\n## Land (bin/lane)\nNot run: the report has no READY-TO-LAND line, so nothing was landed.\n' >> "$report"
+    echo "LANE $lane: land not run, the report has no READY-TO-LAND line" >&2
+    return 6
+  fi
+  # The command goes in a script file: systemd would expand $NAME in a unit's command line.
+  printf '%s\n' "$land_cmd" > "$out_dir/$lane.land.sh"
+  while :; do
+    attempt=$((attempt + 1))
+    out="$out_dir/$lane.land-$attempt.out"
+    echo "LANE $lane: running land command, attempt $attempt" >&2
+    run_land "$out" "$out_dir/$lane.land-$attempt.err" "$attempt"
+    land_rc=$?
+    word="$(grep '^LAND-RESULT ' "$out" 2>/dev/null | tail -n 1 | awk '{print $2}')"
+    summary="$(grep '^LAND-RESULT ' "$out" 2>/dev/null | tail -n 1 | cut -d' ' -f3-)"
+    notes+=("- Attempt $attempt: exit $land_rc, ${word:-no LAND-RESULT line}${summary:+, summary $summary}.")
+    echo "LANE $lane: land attempt $attempt: exit $land_rc ${word:-}" >&2
+    case "$land_rc" in
+      0|4) final=0; break ;;
+      1|2)
+        if [ "$fixes" -ge 2 ]; then final="$land_rc"; notes+=("- No fix rounds left (2 used)."); break; fi
+        fixes=$((fixes + 1))
+        fix_brief "$fixes" "$land_rc" "$word" "$summary" "$out" > "$out_dir/$lane.fix$fixes.brief.md"
+        rm -f "$out_dir/$lane.fix$fixes.last.md"
+        echo "LANE $lane: fix agent $fixes of 2" >&2
+        box_conflict_fix=""
+        [ "$land_rc" = 2 ] && box_conflict_fix=1
+        run_agent "$lane.fix$fixes" "$out_dir/$lane.fix$fixes.brief.md"
+        local fix_rc=$?
+        notes+=("- Fix agent $fixes: exit $fix_rc. Its report: $out_dir/$lane.fix$fixes.last.md (below).")
+        if [ "$fix_rc" != 0 ]; then final="$fix_rc"; break; fi
+        if ! ready_to_land "$out_dir/$lane.fix$fixes.last.md"; then
+          final=6; notes+=("- Fix agent $fixes did not say READY-TO-LAND, so the runner stopped."); break
+        fi
+        ;;
+      3)
+        if [ "$retried" -ge 1 ]; then final=3; notes+=("- Infrastructure failed twice; no more retries."); break; fi
+        retried=1
+        echo "LANE $lane: land infrastructure failure; retrying in ${retry_pause}s" >&2
+        sleep "$retry_pause"
+        ;;
+      *) final="$land_rc"; notes+=("- Unknown land exit code $land_rc; the runner stopped."); break ;;
+    esac
+  done
+  {
+    printf '\n\n## Land (bin/lane)\nResult: %s (exit %s) after %s attempt(s) and %s fix round(s).\n' \
+      "${word:-unknown}" "$land_rc" "$attempt" "$fixes"
+    printf '%s\n' "${notes[@]}"
+    printf '\nLast land output (%s):\n```\n%s\n```\n' "$out" "$(tail -n 30 "$out" 2>/dev/null)"
+    for ((i = 1; i <= fixes; i++)); do
+      printf '\n### Fix agent %s report\n%s\n' "$i" "$(cat "$out_dir/$lane.fix$i.last.md" 2>/dev/null || echo '(no report)')"
+    done
+  } >> "$report"
+  return "$final"
+}
+
+run_land() {
+  local out="$1" err="$2"
+  if [ -n "$box_docker" ]; then
+    box_land "$out" "$err" "$3"
+  elif [ -n "$host" ] && [ -z "$box" ]; then
+    remote_land "$out" "$err"
+  else
+    in_unit "lane-$lane-land" "$out" "$err" -- bash "$out_dir/$lane.land.sh"
+  fi
+}
+
+# The fix brief: short on purpose. The fix agent reads the lane log and summary files itself.
+fix_brief() {
+  local round="$1" code="$2" word="$3" summary="$4" out="$5" trunk goal stat rebase_setup
+  trunk="$(on_worktree git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+  trunk="${trunk:-origin/main}"
+  rebase_setup="Fetch the latest $trunk."
+  [ -n "$box_docker" ] && rebase_setup="The runner copied the Spark's $trunk ref."
+  goal="$(awk '/^## Goal/{f=1; next} f && /^## /{exit} f' "$brief" | sed '/./,$!d')"
+  [ -n "$goal" ] || goal="$(sed '/./,$!d' "$brief" | awk 'NF==0{exit} {print}')"
+  stat="$(on_worktree git diff --stat "$trunk...HEAD" 2>&1 | tail -n 40)"
+  cat <<EOF
+You are fix agent $round of at most 2 for lane $lane. The lane agent finished its work and said READY-TO-LAND. The land command then failed: ${word:-no result word} (exit $code; 1 means a gate failed, 2 a rebase conflict). Fix the cause in this worktree, commit, and say READY-TO-LAND again. The runner then lands the branch with the same land command. Do not run the land command yourself.
+
+## Lane goal
+$goal
+
+## Read first
+- The project lane rules the lane brief names, and the end of the lane log: ${lane_log:-(none)}. Add a line to the lane log for what you fix.
+- The land summary: ${summary:-(none)}. Read its header lines and the failed gate's log it names. Do not read whole gate logs: grep them for the failure.
+- The full lane brief, only if you need it: $brief
+
+## Land command output
+\`\`\`
+$(tail -n 30 "$out" 2>/dev/null)
+\`\`\`
+
+## Changes on this branch (git diff --stat $trunk...HEAD)
+\`\`\`
+$stat
+\`\`\`
+
+## Rules
+- Fix only what makes the land fail. Keep the branch's scope.
+- A rebase conflict: $rebase_setup Rebase on $trunk, resolve, and rerun the gate for the files you touched.
+- A gate failure that this branch did not cause (it fails the same way on $trunk): say so with the evidence, and say READY-TO-LAND to try once more only when the failure is a known flake.
+- Command output goes to a file. Read a summary of at most 30 lines plus the failures.
+- The rules in the lane brief and the project lane rules apply (git safety, secrets, fleet hosts, no subagents that edit).
+
+## Report
+Your final message is your report: what failed, the cause, what you changed (commit SHAs), and the checks you ran. When the branch is ready to land, the last line is exactly:
+READY-TO-LAND
+Leave that line out when you could not fix it, and say why.
+EOF
+}
+
+# Runs a command in the worktree: here, or on the lane host.
+on_worktree() {
+  if [ -n "$host" ] && [ -z "$box" ]; then on_host bash -c 'cd "$1" && shift && "$@"' _ "$worktree" "$@"; else (cd "$worktree" && "$@"); fi
+}
+
+# Prints "LANE <lane> usage <summary>" from the usage files of the lane agent and its fix agents.
+usage_line() {
+  local files=("$out_dir/$lane.usage.json") f
+  for f in "$out_dir/$lane".fix*.usage.json; do [ -f "$f" ] && files+=("$f"); done
+  [ -f "${files[0]}" ] || return 0
+  python3 - "${files[@]}" <<'PY' 2>/dev/null | sed "s/^/LANE $lane usage /"
+import json, sys
+runs = []
+for path in sys.argv[1:]:
+    try:
+        runs.append(json.load(open(path)))
+    except Exception:
+        pass
+if not runs:
+    sys.exit(0)
+def compact(v):
+    if v >= 1e6: return f"{v / 1e6:.1f}M" if v < 1e7 else f"{v / 1e6:.0f}M"
+    if v >= 1e3: return f"{int(v / 1e3 + 0.5)}k"
+    return str(v)
+out = sum(r.get("outputTokens", 0) for r in runs)
+cr = sum(r.get("cacheReadTokens", 0) for r in runs)
+turns = [r["turns"] for r in runs if r.get("turns") is not None]
+peaks = [r["peakContext"] for r in runs if r.get("peakContext") is not None]
+parts = [f"out={compact(out)}", f"cr={compact(cr)}"]
+if turns: parts.append(f"turns={sum(turns)}")
+if peaks: parts.append(f"peak={compact(max(peaks))}")
+parts.append(f"relays={sum(r.get('relays', 0) for r in runs)}")
+if len(runs) > 1: parts.append(f"fixes={len(runs) - 1}")
+print(" ".join(parts))
+PY
 }
 
 # Runs a command on the lane host. Arguments are quoted for the remote shell.
@@ -64,40 +319,390 @@ on_host() {
   ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$host" "$(printf '%q ' "$@")"
 }
 
-remote_lane() {
-  local rdir=".local/state/orchestrate/lanes" home rpath rbase rbrief rreport rlog rrc unit state miss=0
+remote_setup() {
+  rdir=".local/state/orchestrate/lanes"
   [ -n "$worktree" ] || { echo "LANE $lane: --worktree missing" >&2; exit 2; }
   home="$(on_host printenv HOME)" || { echo "LANE $lane: host $host unreachable" >&2; exit 2; }
   on_host test -d "$worktree" || { echo "LANE $lane: worktree '$worktree' missing on $host" >&2; exit 2; }
-  rbase="$home/$rdir/$lane"; rbrief="$rbase.brief.md"; rreport="$rbase.last.md"
-  rlog="$rbase.log"; rrc="$rbase.rc"; unit="lane-$lane"
   # The host's login-shell PATH finds simmer and the harness CLIs (mise shims, ~/.local/bin, ~/.bun/bin).
   rpath="$(ssh -o BatchMode=yes "$host" 'bash -lc "printf %s \"\$PATH\""' 2>/dev/null)"
   [ -n "$rpath" ] || { echo "LANE $lane: no PATH from a login shell on $host" >&2; exit 2; }
-  on_host systemctl --user is-active -q "$unit" && { echo "LANE $lane: unit $unit already runs on $host" >&2; exit 2; }
   on_host mkdir -p "$home/$rdir" || exit 2
-  on_host rm -f "$rreport" "$rrc" || exit 2
-  rsync -a "$brief" "$host:$rbrief" || { echo "LANE $lane: could not copy the brief to $host" >&2; exit 2; }
-  # The unit writes the exit code to <lane>.rc, so the result survives the unit (--collect) and any SSH drop.
-  # systemd expands $NAME and ${...} in the command line, so the wrapper uses only $0, $@ and $?.
-  on_host systemd-run --user --collect --quiet --unit="$unit" --working-directory="$worktree" \
+  check_simmer "$(on_host env PATH="$rpath" simmer lane --help 2>/dev/null)"
+}
+
+# check_simmer <help text>: reads `simmer lane --help` from the lane host. An older simmer has no --usage-out,
+# so the flag goes only to a simmer that lists it. A harness that simmer does not list stops the lane here,
+# before any agent starts.
+check_simmer() {
+  local help="$1" harness="" i
+  for ((i = 0; i < ${#pass[@]}; i += 2)); do [ "${pass[i]}" = --harness ] && harness="${pass[i + 1]}"; done
+  [ -n "$help" ] || { echo "LANE $lane: no simmer${host:+ on $host} (simmer lane --help failed)" >&2; exit 2; }
+  usage_flag=""
+  grep -q -- '--usage-out' <<< "$help" && usage_flag=1
+  if [ -n "$harness" ] && ! grep -- '--harness <name>' <<< "$help" | grep -qw -- "$harness"; then
+    echo "LANE $lane: simmer${host:+ on $host} does not know harness $harness; update simmer there" >&2; exit 2
+  fi
+}
+
+# remote_unit <unit> <rbase> <wrapper> <command...>: starts the command as a user unit on the host and polls it
+# every 30 s. The wrapper script writes the exit code to <rbase>.rc, so the result survives the unit (--collect)
+# and any SSH drop. systemd expands $NAME and ${...} in the command line, so wrappers use only $0, $@ and $?.
+remote_unit() {
+  local unit="$1" rbase="$2" wrapper="$3" state miss=0; shift 3
+  on_host systemctl --user is-active -q "$unit" && { echo "LANE $lane: unit $unit already runs on $host" >&2; return 2; }
+  on_host rm -f "$rbase.rc" || return 2
+  on_host systemd-run --user --collect --quiet --unit="$unit" --working-directory="${unit_wd:-$worktree}" \
     --setenv=PATH="$rpath" --setenv=HOME="$home" --setenv=LANG="${LANG:-C.UTF-8}" \
-    /usr/bin/env bash -c '"$@" > "$0".log 2>&1; echo $? > "$0".rc.tmp; mv -f "$0".rc.tmp "$0".rc' \
-    "$rbase" simmer lane "$rbrief" --worktree "$worktree" --out "$rreport" "${pass[@]}" \
-    || { echo "LANE $lane: could not start $unit on $host" >&2; exit 2; }
-  echo "LANE $lane: started $unit on $host (log $host:$rlog)" >&2
+    /usr/bin/env bash -c "$wrapper"' ; echo $? > "$0".rc.tmp; mv -f "$0".rc.tmp "$0".rc' "$rbase" "$@" \
+    || { echo "LANE $lane: could not start $unit on $host" >&2; return 2; }
+  echo "LANE $lane: started $unit on $host (log $host:$rbase.log)" >&2
+  if [ -n "$box" ]; then box_started "$unit" || return 7; fi
   while :; do
-    sleep 30
-    state="$(on_host bash -c 'if [ -f "$1" ]; then cat "$1"; elif systemctl --user is-active -q "$2"; then echo running; else echo gone; fi' _ "$rrc" "$unit" 2>/dev/null)"
+    sleep "${LANE_POLL_SECONDS:-30}"
+    [ -n "$box" ] && box_poll "$unit"
+    state="$(on_host bash -c 'if [ -f "$1" ]; then cat "$1"; elif systemctl --user is-active -q "$2"; then echo running; elif [ -f "$1" ]; then cat "$1"; else echo gone; fi' _ "$rbase.rc" "$unit" 2>/dev/null)"
     case "$state" in
       running) miss=0 ;;
-      gone) rc=1; echo "LANE $lane: $unit ended on $host without an exit code" >&2; break ;;
-      '') miss=$((miss + 1)); [ "$miss" -eq 1 ] && echo "LANE $lane: $host does not answer; the lane keeps running there" >&2 ;;
-      *) rc="$state"; break ;;
+      gone)
+        # dev-hosts stops a leased unit itself on revoke, often before a poll sees the revoked lease.
+        if [ -n "$box" ] && box_revoked; then revoked=1; return 1; fi
+        echo "LANE $lane: $unit ended on $host without an exit code" >&2; return 1 ;;
+      '') miss=$((miss + 1)); [ "$miss" -eq 1 ] && echo "LANE $lane: $host does not answer; the unit keeps running there" >&2 ;;
+      *) return "$state" ;;
     esac
   done
-  rsync -a "$host:$rlog" "$log" 2>/dev/null || echo "LANE $lane: could not copy the log back" >&2
-  rsync -a "$host:$rreport" "$report" 2>/dev/null || echo "LANE $lane: no report on $host" >&2
+}
+
+remote_agent() {
+  local name="$1" agent_brief="$2" rbase rc extra=()
+  rbase="$home/$rdir/$name"
+  on_host rm -f "$rbase.last.md" || return 2
+  rsync -a "$agent_brief" "$host:$rbase.brief.md" || { echo "LANE $lane: could not copy the brief to $host" >&2; return 2; }
+  [ -n "$usage_flag" ] && extra=(--usage-out "$rbase.usage.json")
+  remote_unit "lane-$name" "$rbase" '"$@" > "$0".log 2>&1' \
+    simmer lane "$rbase.brief.md" --worktree "$worktree" --out "$rbase.last.md" "${extra[@]}" "${pass[@]}"
+  rc=$?
+  rsync -a "$host:$rbase.log" "$out_dir/$name.log" 2>/dev/null || echo "LANE $lane: could not copy the log back" >&2
+  rsync -a "$host:$rbase.last.md" "$out_dir/$name.last.md" 2>/dev/null || echo "LANE $lane: no report on $host" >&2
+  [ -n "$usage_flag" ] && rsync -a "$host:$rbase.usage.json" "$out_dir/$name.usage.json" 2>/dev/null
+  return "$rc"
+}
+
+remote_land() {
+  local out="$1" err="$2" rbase="$home/$rdir/$lane.land" rc
+  rsync -a "$out_dir/$lane.land.sh" "$host:$rbase.sh" || { echo "LANE $lane: could not copy the land script to $host" >&2; return 3; }
+  remote_unit "lane-$lane-land" "$rbase" '"$@" > "$0".log 2> "$0".err' bash "$rbase.sh"
+  rc=$?
+  rsync -a "$host:$rbase.log" "$out" 2>/dev/null
+  rsync -a "$host:$rbase.err" "$err" 2>/dev/null
+  return "$rc"
+}
+
+
+# ---- Container mode -------------------------------------------------------------------------------------
+
+# --host spark: the first arm64 host that `dev-hosts pick` offers.
+pick_spark() {
+  host="$(dev-hosts pick --arch arm64 2>/dev/null | awk '/^hosts\[/{f=1; next} f && /^  /{split($1, a, ","); print a[1]; exit}')"
+  [ -n "$host" ] || { echo "LANE $lane: dev-hosts has no free arm64 host" >&2; exit 2; }
+  echo "LANE $lane: dev-hosts picked $host" >&2
+}
+
+box_setup() {
+  local name email harness="" i origin_head origin
+  box=1
+  [ -n "$worktree" ] && [ -d "$worktree" ] || { echo "LANE $lane: worktree '$worktree' missing" >&2; exit 2; }
+  worktree="$(readlink -f "$worktree")"
+  branch="$(git -C "$worktree" symbolic-ref --quiet --short HEAD)" || { echo "LANE $lane: worktree has no branch checked out" >&2; exit 2; }
+  box_image="$(sed -n 's/^LANE_IMAGE=//p' <<< "$box_conf" | tail -n 1)"
+  box_memory="$(sed -n 's/^LANE_MEMORY=//p' <<< "$box_conf" | tail -n 1)"
+  box_forward="$(sed -n 's/^LANE_FORWARD=//p' <<< "$box_conf" | tail -n 1)"
+  bdir="$home/.local/state/orchestrate/lanes/$lane"; unit_wd="$bdir"
+  box_worktree="$worktree"
+  if [ -n "$box_docker" ]; then
+    box_worktree="$bdir/repo"
+    box_forward=""
+    # A project stack that keeps state on the host names its folder in lane-host.env as LANE_STACK_STATE.
+    box_stack_state="$(sed -n 's/^LANE_STACK_STATE=//p' <<< "$box_conf" | tail -n 1)"
+    box_docker_group="$(on_host stat -c %g /var/run/docker.sock)"
+    [[ "$box_docker_group" =~ ^[0-9]+$ ]] || { echo "LANE $lane: Docker socket missing on $host" >&2; exit 2; }
+  fi
+  [ -n "$lane_log" ] && lane_log="$(readlink -f "$lane_log")"
+  bin_dir="$(dirname "$helper")"
+  rpath="$(ssh -o BatchMode=yes "$host" 'bash -lc "printf %s \"\$PATH\""' 2>/dev/null)"
+  [ -n "$rpath" ] || { echo "LANE $lane: no PATH from a login shell on $host" >&2; exit 2; }
+  on_host mkdir -p "$bdir/out" "$bdir/sock" "$bdir/mirror" "$bdir/logdir" || exit 2
+  rsync -a "$bin_dir/lane-container" "$host:$bdir/lane-container" || { echo "LANE $lane: could not copy lane-container to $host" >&2; exit 2; }
+  check_simmer "$(on_host env PATH="$rpath" "${DOCKER:-docker}" run --rm -v "$home/Projects/simmer:$home/Projects/simmer:ro" \
+    --entrypoint simmer "$box_image" lane --help 2>/dev/null)"
+  name="$(git -C "$worktree" config user.name)"; email="$(git -C "$worktree" config user.email)"
+  origin_head="$(git -C "$worktree" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)"
+  # A clone the runner owns. Pushes from here update its checkout; origin points nowhere, so the agent cannot push.
+  on_host bash -c 'set -e; [ -d "$1/.git" ] || { git init -q "$1"; git -C "$1" symbolic-ref HEAD "refs/heads/$2"; }
+    git -C "$1" config receive.denyCurrentBranch updateInstead
+    git -C "$1" config user.name "$3"; git -C "$1" config user.email "$4"
+    git -C "$1" config remote.origin.url /nonexistent/origin-is-on-the-coordinator-machine
+    git -C "$1" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"' _ "$bdir/repo" "$branch" "$name" "$email" \
+    || { echo "LANE $lane: could not make the clone on $host" >&2; exit 2; }
+  box_origin_head="$origin_head"
+  for ((i = 0; i < ${#pass[@]}; i += 2)); do [ "${pass[i]}" = --harness ] && harness="${pass[i + 1]}"; done
+  trap box_cleanup EXIT
+  box_creds "$harness" || exit 2
+}
+
+# Copies the logins and passwords a lane needs to the host, 0600, removed when the runner exits.
+# agy: its Google login (the refresh token does not rotate). beads: only the forwarded server's section.
+box_creds() {
+  local harness="$1" f tmp
+  if [ "$harness" = agy ]; then
+    on_host mkdir -p -m 700 "$bdir/agy" || return 1
+    for f in "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" "$HOME/.config/antigravity/credential-user-scope"; do
+      [ -f "$f" ] && { rsync -a --chmod=F600 "$f" "$host:$bdir/agy/" || return 1; }
+    done
+  fi
+  if [ -n "$box_forward" ] && [ -f "$HOME/.config/beads/credentials" ]; then
+    tmp="$(mktemp)"; chmod 600 "$tmp"
+    awk -v want="[$box_forward]" '/^\[/{f = ($0 == want)} f' "$HOME/.config/beads/credentials" > "$tmp"
+    if [ -s "$tmp" ]; then rsync -a --chmod=F600 "$tmp" "$host:$bdir/beads-credentials" || { rm -f "$tmp"; return 1; }; fi
+    rm -f "$tmp"
+  fi
+  return 0
+}
+
+box_cleanup() {
+  local rc=$?
+  box_tunnel_stop
+  [ -n "${lease:-}" ] && dev-hosts unlease "$lease" >/dev/null 2>&1
+  if [ "$rc" = 0 ]; then
+    on_host rm -rf "${bdir:?}" 2>/dev/null
+    git -C "$worktree" update-ref -d "refs/lane-box/$lane" 2>/dev/null
+  else
+    on_host rm -rf "${bdir:?}/agy" "${bdir:?}/beads-credentials" 2>/dev/null
+    echo "LANE $lane: kept $host:$bdir (clone, logs) for a look; the lane's commits are in refs/lane-box/$lane here" >&2
+  fi
+}
+
+box_git() {
+  if [ -n "$box_docker" ]; then local -x GIT_SSH_COMMAND='ssh -o BatchMode=yes'; fi
+  git -C "$worktree" -c core.hooksPath=/dev/null "$@"
+}
+
+# Pushes the branch and the origin refs to the host's clone. The clone's checkout follows (updateInstead).
+box_push() {
+  local force=()
+  [ -z "$box_docker" ] && force=(--force)
+  box_git push -q "${force[@]}" "$host:$bdir/repo" "HEAD:refs/heads/$branch" \
+    '+refs/remotes/origin/*:refs/remotes/origin/*' '^refs/remotes/origin/HEAD' || return 1
+  [ -n "$box_origin_head" ] && on_host git -C "$bdir/repo" symbolic-ref refs/remotes/origin/HEAD "$box_origin_head"
+  return 0
+}
+
+# Fetches the lane's commits into refs/lane-box/<lane>, so they are safe here even if the host goes away.
+box_fetch() { box_git fetch -q "$host:$bdir/repo" "+refs/heads/$branch:refs/lane-box/$lane"; }
+
+# Sync commits without overwriting local changes or rewriting the coordinator's branch.
+box_ff() {
+  local start="$1" tip="refs/lane-box/$lane" rebased
+  box_fetch || { echo "LANE $lane: could not fetch the lane's commits from $host" >&2; return 1; }
+  [ "$(box_git rev-parse HEAD)" = "$(box_git rev-parse "$tip")" ] && return 0
+  if box_git merge-base --is-ancestor HEAD "$tip"; then
+    box_git merge -q --ff-only "$tip" && return 0
+  elif [ -n "$box_docker" ] && [ -n "${box_conflict_fix:-}" ] &&
+       [ "$(box_git rev-parse HEAD)" = "$start" ] && [ -z "$(box_git status --porcelain)" ] &&
+       box_git merge-base --is-ancestor "${box_origin_head:-refs/remotes/origin/main}" "$tip"; then
+    # A conflict fix rewrites commits. Preserve the old branch and use a new one.
+    rebased="wt/$lane-rebased-$(box_git rev-parse --short=12 "$tip")"
+    if box_git switch -q --no-overwrite-ignore -c "$rebased" "$tip"; then
+      echo "LANE $lane: conflict fix is on $rebased in $worktree" >&2
+      return 0
+    fi
+  fi
+  echo "LANE $lane: could not update $worktree; the commits are in $tip" >&2
+  return 1
+}
+
+# The beads forward: ssh -R from here to the host, a port on the host's loopback. lane-container relays it
+# into the container as <server>:<port>. No key and no route to the server on the host.
+box_tunnel_start() {
+  local err="$tmp_dir/tunnel.err" port i
+  [ -n "$box_forward" ] || return 0
+  [ -n "${tunnel_pid:-}" ] && kill -0 "$tunnel_pid" 2>/dev/null && return 0
+  : > "$err"
+  ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -R "127.0.0.1:0:$box_forward" "$host" 2> "$err" &
+  tunnel_pid=$!
+  for ((i = 0; i < 30; i++)); do
+    port="$(sed -n 's/^Allocated port \([0-9]*\) for remote forward.*/\1/p' "$err" | head -n 1)"
+    [ -n "$port" ] && break
+    kill -0 "$tunnel_pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  if [ -z "$port" ]; then echo "LANE $lane: the beads forward to $host failed: $(tail -n 1 "$err")" >&2; return 1; fi
+  on_host bash -c 'echo "$1" > "$2.tmp" && mv -f "$2.tmp" "$2"' _ "$port" "$bdir/beads.port"
+}
+
+box_tunnel_stop() {
+  [ -n "${tunnel_pid:-}" ] && kill "$tunnel_pid" 2>/dev/null
+  tunnel_pid=""
+}
+
+# Runs one agent in the container. Same files as the other modes, plus exit 7 on a revoked lease.
+box_agent() {
+  local name="$1" agent_brief="$2" rbase="$bdir/out/$1" rc mounts log_base="" start
+  start="$(box_git rev-parse HEAD)" || return 2
+  tmp_dir="$(mktemp -d)"
+  box_push || { echo "LANE $lane: could not push $branch to $host (uncommitted files in its clone?)" >&2; rm -rf "${tmp_dir:?}"; return 2; }
+  { cat "$agent_brief"; box_note; } > "$tmp_dir/brief.md"
+  on_host rm -f "${rbase:?}.last.md" "${rbase:?}.usage.json" "${rbase:?}.log"
+  [ -n "$box_docker" ] && rm -f "${out_dir:?}/${name:?}.last.md"
+  rsync -a "$tmp_dir/brief.md" "$host:$rbase.brief.md" || { echo "LANE $lane: could not copy the brief to $host" >&2; rm -rf "${tmp_dir:?}"; return 2; }
+  # The files the brief names, read-only at the same paths. The lane log's folder is a copy the runner syncs.
+  python3 "$bin_dir/lane-container" mirror "$agent_brief" "$worktree" ${lane_log:+"$(dirname "$lane_log")"} \
+    > "$tmp_dir/mounts.list" 2> "$tmp_dir/mirror.err"
+  sed "s/^/LANE $lane: /" "$tmp_dir/mirror.err" >&2
+  mounts="$(cut -f1 "$tmp_dir/mounts.list" | sort -u)"
+  if [ -n "$mounts" ]; then
+    # shellcheck disable=SC2086
+    # A dangling symlink (a skill linked to a missing folder) is not an error worth a line.
+    # lane-container mirror already refuses secret paths; the excludes are a second net for secret file names.
+    (IFS=$'\n'; rsync -aLR --delete --exclude='.env' --exclude='.env.*' --exclude='*.pem' --exclude='*.key' \
+      --exclude='*.age' --exclude='id_*' --exclude='.credentials.json' --exclude='credentials' \
+      $mounts "$host:$bdir/mirror/") 2>&1 \
+      | grep -v -e '^symlink has no referent' -e '^rsync error: some files/attrs were not transferred' -e '^IO error encountered -- skipping file deletion' \
+      | sed "s/^/LANE $lane: mirror: /" >&2
+  fi
+  rsync -a "$tmp_dir/mounts.list" "$host:$bdir/mounts.list"
+  if [ -n "$lane_log" ]; then
+    rsync -a --include='*.md' --exclude='*' "$(dirname "$lane_log")/" "$host:$bdir/logdir/"
+    log_base="$tmp_dir/lanelog.base"; cp -f "${lane_log:?}" "${log_base:?}" 2>/dev/null || : > "$log_base"
+  fi
+  {
+    echo "LANE_NAME=$name"; echo "LANE_DIR=$bdir"; echo "LANE_IMAGE=$box_image"; echo "LANE_WORKTREE=$box_worktree"
+    [ -n "$box_docker" ] && echo "LANE_DOCKER_GROUP=$box_docker_group"
+    [ -n "${box_stack_state:-}" ] && echo "LANE_STACK_STATE=$box_stack_state"
+    echo "LANE_MEMORY=${box_memory:-12g}"; echo "LANE_FORWARD=$box_forward"; echo "LANE_HOST=$host"
+    [ -n "$lane_log" ] && echo "LANE_LOG_DIR=$(dirname "$lane_log")"
+  } > "$tmp_dir/spec.env"
+  rsync -a "$tmp_dir/spec.env" "$host:$bdir/$name.spec"
+  box_tunnel_start || { rm -rf "${tmp_dir:?}"; return 3; }
+  box_name="$name"; box_rbase="$rbase"; box_log_base="$log_base"; box_barrier="$bdir/$name.go"
+  lease=""; revoked=""; lease_miss=0
+  on_host rm -f "${box_barrier:?}"
+  remote_unit "lane-$name" "$rbase" '"$@" > "$0".log 2>&1' \
+    python3 "$bdir/lane-container" run "$bdir/$name.spec" \
+    simmer lane "/run/lane-out/$name.brief.md" --worktree "$box_worktree" --out "/run/lane-out/$name.last.md" \
+    ${usage_flag:+--usage-out "/run/lane-out/$name.usage.json"} "${pass[@]}"
+  rc=$?
+  box_collect
+  box_ff "$start" || { [ -n "$box_docker" ] && [ "$rc" = 0 ] && rc=3; }
+  [ -n "$lease" ] && dev-hosts unlease "$lease" >/dev/null 2>&1; lease=""
+  rm -rf "${tmp_dir:?}"
+  if [ -n "$revoked" ]; then
+    echo "LANE $lane: dev-hosts revoked the lease on $host, so the lane stopped. Its commits are on $branch in $worktree." >&2
+    echo "LANE $lane: start it again from the lane log ${lane_log:-(none)}, on another host or later." >&2
+    return 7
+  fi
+  return "$rc"
+}
+
+# Run the land command on the same Spark in a separate clone. A failed rebase or gate leaves
+# the agent clone ready for the next fix round. Only the host checkout uses the upstream URL.
+box_land() {
+  local out="$1" err="$2" attempt="$3" rbase summary origin rc trunk checkout
+  rbase="$bdir/out/land-$attempt"
+  summary="$out_dir/$lane.land-$attempt.summary"
+  checkout="$(on_host mktemp -d "$bdir/land-$attempt.XXXXXX")" || return 3
+  origin="$(git -C "$worktree" remote get-url origin)" || return 3
+  rsync -a -e 'ssh -o BatchMode=yes' "$out_dir/$lane.land.sh" "$host:$rbase.sh" || return 3
+  # Keep the barrier beside the checkout. Git clone needs its destination to be empty.
+  box_barrier="$checkout.go"
+  lease=""; revoked=""; lease_miss=0
+  remote_unit "lane-$lane-land" "$rbase" '"$@" > "$0".log 2> "$0".err' \
+    python3 "$bdir/lane-container" land "$box_barrier" "$bdir/repo" "$checkout" "$origin" \
+    "$rbase.sh" "$rbase.summary"
+  rc=$?
+  if ! rsync -a -e 'ssh -o BatchMode=yes' "$host:$rbase.log" "$out" 2>/dev/null; then
+    : > "$out"
+    rc=3
+  fi
+  rsync -a -e 'ssh -o BatchMode=yes' "$host:$rbase.err" "$err" 2>/dev/null
+  if rsync -a -e 'ssh -o BatchMode=yes' "$host:$rbase.summary" "$summary" 2>/dev/null; then
+    LAND_SUMMARY="$summary" awk '/^LAND-RESULT / { print $1, $2, ENVIRON["LAND_SUMMARY"]; next } { print }' "$out" \
+      > "$out.tmp" && mv -f "${out:?}.tmp" "${out:?}"
+  fi
+  trunk="${box_origin_head:-refs/remotes/origin/main}"
+  if on_host git -C "$checkout" show-ref --verify --quiet "$trunk"; then
+    box_git fetch -q "$host:$checkout" "+$trunk:$trunk"
+  fi
+  [ -n "$lease" ] && dev-hosts unlease "$lease" >/dev/null 2>&1; lease=""
+  [ -n "$revoked" ] && return 7
+  return "$rc"
+}
+
+# Copies the log, report and usage back, and syncs the lane log.
+box_collect() {
+  rsync -a "$host:$box_rbase.log" "$out_dir/$box_name.log" 2>/dev/null
+  rsync -a "$host:$box_rbase.last.md" "$out_dir/$box_name.last.md" 2>/dev/null
+  rsync -a "$host:$box_rbase.usage.json" "$out_dir/$box_name.usage.json" 2>/dev/null
+  [ -n "$box_log_base" ] && python3 "$bin_dir/lane-container" sync-log "$lane_log" "$box_log_base" "$host" \
+    "$bdir/lane-container" "$bdir/logdir/$(basename "$lane_log")"
+  return 0
+}
+
+# Leases the host for the unit, then lets the unit start the container (the barrier file).
+box_started() {
+  local unit="$1" out
+  out="$(dev-hosts lease "$host" --owner "${LANE_LEASE_OWNER:-lane-$lane}" --unit "$unit" --on-revoke TERM 2>&1)" || out=""
+  lease="$(grep -oE 'lease: *"?[^" ]+' <<< "$out" | head -n 1 | sed -E 's/lease: *"?//')"
+  if [ -z "$lease" ]; then
+    echo "LANE $lane: dev-hosts gave no lease on $host: $(tail -n 1 <<< "$out")" >&2
+    on_host systemctl --user stop "$unit"; revoked=1; return 1
+  fi
+  on_host touch "$box_barrier" || { on_host systemctl --user stop "$unit"; return 1; }
+}
+
+# Each poll: commits, log, usage and lane log come back; the forward stays up; a revoked lease stops the unit.
+box_poll() {
+  local unit="$1"
+  if [ "$unit" != "lane-$lane-land" ]; then
+    box_fetch 2>/dev/null
+    box_collect
+    box_tunnel_start >/dev/null 2>&1
+  fi
+  [ -n "$revoked" ] && return 0
+  if dev-hosts check "$lease" >/dev/null 2>&1; then lease_miss=0; return 0; fi
+  lease_miss=$((lease_miss + 1))
+  if [ "$lease_miss" -ge 2 ] || box_revoked; then
+    revoked=1
+    echo "LANE $lane: the lease on $host is gone; stopping $unit" >&2
+    on_host systemctl --user stop "$unit" 2>/dev/null
+  fi
+}
+
+# True when dev-hosts says the lane's lease is revoked, or the lease is gone and the host is reserved.
+box_revoked() {
+  local out
+  [ -n "$lease" ] || return 1
+  out="$(dev-hosts check "$lease" 2>/dev/null)"
+  grep -qE '^ *state: *"?revoked' <<< "$out" && return 0
+  grep -qE '^ *state: *"?missing' <<< "$out" || return 1
+  dev-hosts status --fields host,reservation 2>/dev/null | grep -qE "^ *$host,\"?[^\",]"
+}
+
+box_note() {
+  local log_line=""
+  [ -n "$lane_log" ] && log_line="The lane log $lane_log is writable: append to it, and read it for the coordinator's notes, which reach you within a minute."
+  cat <<EOF
+
+
+## Where you run (bin/lane container mode)
+- You run in a container on $host. Your worktree is $box_worktree. Commit your work: the runner copies each commit back every 30 s.
+- \`git push\` and \`git fetch origin\` do not work here; refs/remotes/origin/* is a copy from your start. Do not push or land. When your brief says to push or land, commit and end your report with the line READY-TO-LAND. The runner then runs the land command.
+- The files your brief names are read-only copies. $log_line
+- No token store, no ssh keys and no deploy secrets here. Work that needs them belongs to a lane on the coordinator's machine: say so in your report.
+- Run builds and tests here, in this container, one at a time: your lane holds this host's dev-hosts lease. \`dev-hosts\` here only explains this.
+EOF
 }
 
 main "$@"; exit $?

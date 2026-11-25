@@ -25,14 +25,14 @@ To try my exact setup first, the steps below copy it.
 
 ```bash
 curl -fsSL https://stack.yiin.dev/stack.tar.gz | tar -xz
-mkdir -p ~/.claude/skills ~/.claude/agents ~/.claude/hooks ~/.claude/tools
+mkdir -p ~/.claude/skills ~/.claude/agents ~/.agents/hooks ~/.agents/tools
 cp -rf stack/skills/* ~/.claude/skills/
 cp -f stack/agents/* ~/.claude/agents/
-cp -rf stack/tools/project-map ~/.claude/tools/
-cp -f stack/hooks/project-map-guard.sh ~/.claude/hooks/
-chmod +x ~/.claude/hooks/project-map-guard.sh
+cp -rf stack/tools/project-map ~/.agents/tools/
+cp -f stack/hooks/project-map-guard.sh ~/.agents/hooks/
+chmod +x ~/.agents/hooks/project-map-guard.sh
 # optional: delete map screenshots after 30 days, every day
-mkdir -p ~/.config/systemd/user && cp -f ~/.claude/tools/project-map/project-map-sweep.* ~/.config/systemd/user/
+mkdir -p ~/.config/systemd/user && cp -f ~/.agents/tools/project-map/project-map-sweep.* ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now project-map-sweep.timer
 # simmer, plus the /cook-it and /cook-epic skills (needs bun)
 curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh | bash

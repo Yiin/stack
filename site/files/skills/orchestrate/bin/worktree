@@ -5,20 +5,36 @@
 #   worktree new <repo-path> <lane> [base-ref]   create <root>/<repo>/<lane> on branch wt/<lane> from base-ref
 #                                                (default origin/main after a fetch) and print its path
 #   worktree list                                every worktree under the root: repo, lane, landed?, dirty?
-#   worktree clean [--apply]                     remove worktrees whose branch is landed in origin/<trunk> and
-#                                                that have no uncommitted changes and no process working
-#                                                in them. Dry run without --apply.
+#   worktree clean [--apply] [--older-than <days>]
+#                                                remove every worktree under the root that `retire` would
+#                                                remove. Dry run without --apply. Kept worktrees show the
+#                                                reason and the days since their last commit.
+#   worktree retire <dir>                        fetch, then remove one worktree only when removing it loses
+#                                                no work: its branch is landed in origin/<trunk>, it has no
+#                                                uncommitted or untracked files, no ignored files outside
+#                                                regenerable folders (node_modules, dist, ...), and no
+#                                                process works in it. Prints "removed <dir>" or "kept <dir>
+#                                                (<reason>)". bin/lane runs it after a lane exits 0.
+#   worktree salvage <dir>                       save a dead worktree's uncommitted changes (patch plus a tar
+#                                                of untracked files) under <salvage>/<repo>/<lane>-<date>/,
+#                                                then remove the worktree. The branch stays. Prints the folder.
+#   worktree strays                              worktrees of repos under ~/Projects that live outside the
+#                                                root. Each one is a rules bug: move it or salvage it.
 #
-# Root: $ORCHESTRATE_WT_ROOT, default ~/.local/share/agent-worktrees. Deleting a worktree folder by hand
-# leaves git metadata behind; use `clean`, or `git -C <repo> worktree prune` afterwards.
+# Root: $ORCHESTRATE_WT_ROOT, default ~/.local/share/agent-worktrees. Salvage: $ORCHESTRATE_SALVAGE, default
+# ~/.local/state/orchestrate/salvage. Deleting a worktree folder by hand leaves git metadata behind; use
+# `clean` or `salvage`, or `git -C <repo> worktree prune` afterwards.
 set -euo pipefail
 
-root="${ORCHESTRATE_WT_ROOT:-$HOME/.local/share/agent-worktrees}"
+# The real path, so find walks a symlinked root and in_use compares it with real process working directories.
+root="$(readlink -m "${ORCHESTRATE_WT_ROOT:-$HOME/.local/share/agent-worktrees}")"
+salvage_root="${ORCHESTRATE_SALVAGE:-$HOME/.local/state/orchestrate/salvage}"
 
 trunk_of() { # trunk branch name of the repo a worktree belongs to (origin/HEAD, else main)
   local ref
   ref="$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-  echo "${ref#origin/}" | sed 's/^$/main/'
+  ref="${ref#origin/}"
+  echo "${ref:-main}"
 }
 
 status_of() { # prints "landed|unlanded clean|dirty" for a worktree path
@@ -29,19 +45,63 @@ status_of() { # prints "landed|unlanded clean|dirty" for a worktree path
   echo "$landed $dirty"
 }
 
-in_use() { # true when a process runs with its working directory inside the worktree
-  local dir="$1" proc cwd
-  for proc in /proc/[0-9]*; do
-    cwd="$(readlink "$proc/cwd" 2>/dev/null)" || continue
-    case "$cwd/" in "$dir"/*) return 0 ;; esac
-  done
-  return 1
+# Sees only processes whose working directory this user may read: its own. Processes of other users and
+# inside containers stay invisible, so lanes must run as the worktree owner.
+in_use() { # true when a process runs with its working directory inside the worktree (a real path)
+  local found
+  found="$(find /proc/[0-9]*/cwd -maxdepth 0 -printf '%l\n' 2>/dev/null \
+    | awk -v d="$1" '$0 == d || index($0, d "/") == 1 { print "yes"; exit }')"
+  [ -n "$found" ]
+}
+
+# Ignored folders and files that a build or install recreates. Any other ignored file may be work that git
+# never saw, such as a local .env or notes, so it keeps the worktree. bd recreates its runtime files in .beads/,
+# but not the rest of .beads/, which can hold an embedded issue database.
+regenerable='(^|/)(node_modules|dist|build|out|coverage|target|\.turbo|\.next|\.nuxt|\.svelte-kit|\.vite|\.cache|\.parcel-cache|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.venv|venv|test-results|playwright-report|blob-report|\.wrangler|storybook-static)(/|$)|\.(tsbuildinfo|log|pyc)$|(^|/)\.beads/(last-touched|\.local_version|\.sync-head|[^/]*\.lock)$'
+
+unsaved_ignored() { # up to five ignored paths outside regenerable folders, comma-separated
+  local dir="$1" entry
+  { git -C "$dir" ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory 2>/dev/null || true; } \
+    | while IFS= read -r -d '' entry; do
+        if [[ $entry == */ ]] && ! [[ $entry =~ $regenerable ]]; then
+          # git folds a folder that holds only ignored files into one entry, so look inside it.
+          git -C "$dir" ls-files -z --others --ignored --exclude-standard -- "$entry" 2>/dev/null || true
+        else
+          printf '%s\0' "$entry"
+        fi
+      done | tr '\0' '\n' | { grep -vE "$regenerable" || true; } | head -5 | paste -sd, - || true
+}
+
+keep_reason() { # prints why a worktree must stay; prints nothing when removing it loses no work. Fetch first.
+  local dir="$1" landed dirty ignored
+  [ -f "$dir/.git" ] || { echo "not a linked worktree"; return; }
+  git -C "$dir" remote get-url origin >/dev/null 2>&1 || { echo "no origin"; return; }
+  git -C "$dir" rev-parse -q --verify HEAD >/dev/null || { echo "no commits"; return; }
+  read -r landed dirty <<<"$(status_of "$dir")"
+  [ "$landed" = landed ] || { echo "unlanded commits"; return; }
+  [ "$dirty" = clean ] || { echo "uncommitted or untracked files"; return; }
+  ignored="$(unsaved_ignored "$dir")"
+  [ -z "$ignored" ] || { echo "ignored files: $ignored"; return; }
+  # Last, so the removal follows this check as closely as possible.
+  if in_use "$dir"; then echo "a process still works in it"; fi
+}
+
+remove_worktree() { # removes a worktree and its landed branch; git itself refuses dirty or locked worktrees
+  local dir="$1" branch main_checkout
+  branch="$(git -C "$dir" branch --show-current)"
+  main_checkout="$(dirname "$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir)")"
+  if ! git -C "$main_checkout" worktree remove "${dir:?}" 2>/dev/null; then
+    echo "kept    $dir (git refused to remove it)"
+    return
+  fi
+  [ -n "$branch" ] && git -C "$main_checkout" branch -d "$branch" >/dev/null 2>&1 || true
+  echo "removed $dir ($branch)"
 }
 
 each_worktree() { # prints worktree paths under the root
   [ -d "$root" ] || return 0
   find "$root" -mindepth 2 -maxdepth 2 -type d | while read -r dir; do
-    [ -e "$dir/.git" ] && echo "$dir"
+    if [ -e "$dir/.git" ]; then echo "$dir"; fi
   done
 }
 
@@ -63,33 +123,88 @@ case "$cmd" in
     done
     ;;
   clean)
-    apply="${2:-}"
+    apply=""
+    older_than=0
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --apply) apply=--apply; shift ;;
+        --older-than)
+          [[ ${2:-} =~ ^[0-9]+$ ]] || { echo 'Expected days after --older-than.' >&2; exit 2; }
+          older_than=$((10#$2)); shift 2 ;;
+        *) echo "Unknown clean option: $1" >&2; exit 2 ;;
+      esac
+    done
     git_dirs_fetched=""
     each_worktree | while read -r dir; do
-      common="$(git -C "$dir" rev-parse --git-common-dir)"
-      case " $git_dirs_fetched " in *" $common "*) ;; *) git -C "$dir" fetch --quiet origin || true; git_dirs_fetched="$git_dirs_fetched $common" ;; esac
-      read -r landed dirty <<<"$(status_of "$dir")"
-      branch="$(git -C "$dir" branch --show-current)"
-      if [ "$landed" != landed ] || [ "$dirty" != clean ]; then
-        echo "keep    $dir ($branch: $landed, $dirty)"
-        continue
+      branch="$(git -C "$dir" branch --show-current 2>/dev/null || true)"
+      if [ "$older_than" -gt 0 ]; then
+        # Include metadata and untracked files, so a recent checkout stays.
+        recent="$(find "$dir" -xdev \( -mmin "-$((older_than * 1440))" -o -cmin "-$((older_than * 1440))" \) -print -quit)"
+        if [ -n "$recent" ]; then
+          echo "keep    $dir ($branch: activity within ${older_than}d)"
+          continue
+        fi
       fi
-      if in_use "$dir"; then
-        echo "keep    $dir ($branch: a process still works in it)"
-        continue
-      fi
-      if [ "$apply" = --apply ]; then
-        main_checkout="$(dirname "$(readlink -f "$common")")"
-        git -C "$main_checkout" worktree remove "${dir:?}"
-        [ -n "$branch" ] && git -C "$main_checkout" branch -d "$branch" >/dev/null || true
-        echo "removed $dir ($branch)"
+      common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+      case " $git_dirs_fetched " in
+        *" $common "*) ;;
+        *) git -C "$dir" fetch --quiet origin 2>/dev/null || true; git_dirs_fetched="$git_dirs_fetched $common" ;;
+      esac
+      reason="$(keep_reason "$dir")"
+      if [ -n "$reason" ]; then
+        commit_time="$(git -C "$dir" log -1 --format=%ct 2>/dev/null || date +%s)"
+        echo "keep    $dir ($branch: $reason, last commit $(( ($(date +%s) - commit_time) / 86400 ))d ago)"
+      elif [ "$apply" = --apply ]; then
+        remove_worktree "$dir"
       else
         echo "remove  $dir ($branch: landed, clean)  [dry run; pass --apply]"
       fi
     done
     ;;
+  retire)
+    dir="$(readlink -f "${2:?usage: worktree retire <dir>}")"
+    # A stale origin/<trunk> could hide that the trunk moved, so a failed fetch keeps the worktree.
+    if ! git -C "$dir" fetch --quiet origin 2>/dev/null; then
+      echo "kept    $dir (fetch from origin failed)"
+      exit 0
+    fi
+    reason="$(keep_reason "$dir")"
+    if [ -n "$reason" ]; then echo "kept    $dir ($reason)"; else remove_worktree "$dir"; fi
+    ;;
+  salvage)
+    dir="$(readlink -f "${2:?usage: worktree salvage <dir>}")"
+    [ -e "$dir/.git" ] && [ -f "$dir/.git" ] || { echo "not a linked worktree: $dir" >&2; exit 2; }
+    if in_use "$dir"; then echo "a process still works in $dir" >&2; exit 1; fi
+    common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir)"
+    main_checkout="$(dirname "$common")"
+    out="$salvage_root/$(basename "$main_checkout")/$(basename "$dir")-$(date +%Y%m%d)"
+    mkdir -p "$out"
+    {
+      echo "worktree $dir"
+      echo "branch $(git -C "$dir" branch --show-current)"
+      echo "head $(git -C "$dir" rev-parse HEAD)"
+      echo "saved $(date -Iseconds)"
+    } > "$out/info.txt"
+    git -C "$dir" diff --no-ext-diff --binary HEAD > "$out/changes.patch"
+    git -C "$dir" ls-files -o --exclude-standard -z > "$out/untracked.list0"
+    if [ -s "$out/untracked.list0" ]; then
+      tar -C "$dir" --null -T "$out/untracked.list0" -czf "$out/untracked.tgz"
+    fi
+    git -C "$main_checkout" worktree remove --force "${dir:?}"
+    echo "$out"
+    ;;
+  strays)
+    for common in "$HOME"/Projects/*/.git; do
+      [ -d "$common" ] || continue
+      git -C "${common%/.git}" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | tail -n +2 \
+        | while read -r dir; do
+            case "$dir/" in "$root"/*) ;; *) echo "stray   $dir (repo ${common%/.git})" ;; esac
+          done
+    done
+    ;;
   *)
-    sed -n '2,14p' "$0" >&2
+    sed -n '2,20p' "$0" >&2
     exit 2
     ;;
 esac

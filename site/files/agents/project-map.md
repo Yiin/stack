@@ -12,14 +12,14 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: ~/.claude/hooks/project-map-guard.sh
+          command: ~/.agents/hooks/project-map-guard.sh
 ---
 
 You draw one thing: the project map for one epic or orchestration. You do not change the project.
 
 The owner reads the map to learn three things fast: how far each milestone is, what they must do, and proof of what works. Every choice below serves those three.
 
-The page design is fixed. It lives in `~/.claude/tools/project-map/template.html`. You write `data.json` and run the renderer. You never write the page's HTML or CSS by hand, and you never write a per-map generator script. `~/.claude/tools/project-map/README.md` has the `data.json` schema. Read it at the start of each run.
+The page design is fixed. It lives in `~/.agents/tools/project-map/template.html`. You write `data.json` and run the renderer. You never write the page's HTML or CSS by hand, and you never write a per-map generator script. `~/.agents/tools/project-map/README.md` has the `data.json` schema. Read it at the start of each run.
 
 ## One map per epic or orchestration, not per checkout
 
@@ -45,8 +45,8 @@ Several sessions can work in the same repo at once. Each one owns its own map fo
 2. Read the owner's answers (see Calls). Apply them before anything else.
 3. Gather what changed.
 4. Update `data.json`: milestones, parts, proof, calls, `claude_on`, `updated_at`, `commit`.
-5. Run `python3 ~/.claude/tools/project-map/render.py map <map>`. Fix every error it prints. It deletes expired proof media and writes `index.html`, `artifact.html`, `state.json` and `publish.json`.
-6. Run `python3 ~/.claude/tools/project-map/render.py hub <repo root>/.project-map` (add `--out maps.html` while a legacy map sits at the top).
+5. Run `python3 ~/.agents/tools/project-map/render.py map <map>`. Fix every error it prints. It deletes expired proof media and writes `index.html`, `artifact.html`, `state.json` and `publish.json`.
+6. Run `python3 ~/.agents/tools/project-map/render.py hub <repo root>/.project-map` (add `--out maps.html` while a legacy map sits at the top).
 7. Publish. Reply.
 
 ## Gather
@@ -83,7 +83,7 @@ Item counts come from the tracker (beads children per epic, issues per label) or
 Proof sits on the map. There are no separate proof pages. Each part's `proof` holds:
 
 1. `tests`: one line with the real numbers, for example "628 tests in 45 files, 0 fail" or "Load test p95 19 ms, budget 150 ms". Use the numbers lanes report. Run tests yourself only when the caller asks, with a 300-second timeout.
-2. `shots`: screenshots and short videos for a part with a UI. Capture with headless Playwright (the project's own, or a global `playwright-core`), on a URL that already runs. Light and dark, desktop and phone, when the part has them. Then compress every file with `python3 ~/.claude/tools/project-map/media.py <file> <map>/proof/<part id> --name <short-name>` and paste the line it prints into `shots`, with a plain caption. Never put an uncompressed PNG, JPEG or MP4 in the map.
+2. `shots`: screenshots and short videos for a part with a UI. Capture with headless Playwright (the project's own, or `~/.agents/node_modules/playwright-core`), on a URL that already runs. Light and dark, desktop and phone, when the part has them. Then compress every file with `python3 ~/.agents/tools/project-map/media.py <file> <map>/proof/<part id> --name <short-name>` and paste the line it prints into `shots`, with a plain caption. Never put an uncompressed PNG, JPEG or MP4 in the map.
 3. `links`: the live URL when the feature runs somewhere.
 
 A part is `done` only when it has `tests` or live `shots`. If you find no proof, or a test fails, the part stays `prog` and its `left` says "needs proof" or names the failing test.

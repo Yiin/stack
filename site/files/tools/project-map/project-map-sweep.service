@@ -3,6 +3,6 @@ Description=Delete project-map proof media older than 30 days
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 %h/.claude/tools/project-map/sweep.py %h
+ExecStart=/usr/bin/python3 %h/.agents/tools/project-map/sweep.py %h
 Nice=10
 IOSchedulingClass=idle

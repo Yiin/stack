@@ -45,7 +45,7 @@ def find_maps(root):
             if (pm / "evidence").is_dir():
                 yield pm
         dirnames[:] = [d for d in dirnames if d not in SKIP and d != ".project-map"
-                       and not (d.startswith(".") and d not in {".claude", ".config"})
+                       and not (d.startswith(".") and d not in {".agents", ".claude", ".config"})
                        and depth < MAX_DEPTH]
 
 

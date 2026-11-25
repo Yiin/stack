@@ -333,6 +333,15 @@ footer{padding:56px 16px 64px;color:var(--muted);font-size:14px;text-align:cente
 .ledger th{color:#a19db3;font-weight:500;text-align:left;padding:4px 6px}
 .ledger td{padding:5px 6px;border-top:1px solid #2e2b3a}
 .ledger .pass{color:#7fd8a8}.ledger .rework{color:#f2c46b}
+
+/* ---------- the kitchen itself ---------- */
+.room .idea p{margin:0}
+.room .idea p + p{margin-top:8px}
+.room .idea ol{margin:8px 0 0;padding-left:20px}
+.room .idea li{margin:3px 0}
+.room .idea .side{color:var(--muted);font-size:14px}
+.card ul{margin:0;padding-left:20px;font-size:15px}
+.card li{margin:4px 0}
 </style>
 </head>
 <body>
@@ -694,6 +703,17 @@ workflow. Keep what already works. Skip what we do not need.</pre>
     </div>
 
     <div class="card">
+      <h3>How a lane runs</h3>
+      <ul>
+        <li>Each lane runs on its own, as a background service. It keeps going when the head chef's session ends.</li>
+        <li>When a lane's conversation gets too long, a fresh robot takes over. It picks up from the lane's notes.</li>
+        <li>When the work is ready, the robot says so and stops. A script runs the tests and lands the work, with no model watching. If that fails, a fresh robot gets two tries to fix it.</li>
+        <li>A lane can run on a spare machine, in a locked box that sees only the files its brief names.</li>
+        <li>A watchdog checks every minute. It wakes the head chef only for something new: a stuck lane, a deploy, a machine low on memory, or a lane whose conversation grows too long.</li>
+      </ul>
+    </div>
+
+    <div class="card">
       <h3>It asks you only about</h3>
       <div class="asks">
         <div><svg class="icon"><use href="#i-coin"/></svg>Money</div>
@@ -728,6 +748,7 @@ workflow. Keep what already works. Skip what we do not need.</pre>
       <a href="files/skills/orchestrate/references/review-brief.md"><svg class="icon"><use href="#i-file"/></svg>review brief</a>
       <a href="files/skills/orchestrate/bin/lane"><svg class="icon"><use href="#i-terminal"/></svg>lane runner</a>
       <a href="files/skills/orchestrate/bin/watchdog"><svg class="icon"><use href="#i-terminal"/></svg>watchdog</a>
+      <a href="files/skills/orchestrate/bin/lane-container"><svg class="icon"><use href="#i-terminal"/></svg>locked-box lane</a>
     </div>
   </div>
 </section>
@@ -777,6 +798,50 @@ workflow. Keep what already works. Skip what we do not need.</pre>
       </div>
       <p class="side">Big choices come from blind tests. Several models do the same task, hidden tests and a judge from another model family score them, and the winner becomes the default. Cost means my scarcest usage, so a lane goes to the cheaper engine when quality is close.</p>
       <div class="files"><a href="files/skills/orchestrate/references/routing-rules.md"><svg class="icon"><use href="#i-file"/></svg>routing rulebook</a><a href="files/skills/orchestrate/SKILL.md"><svg class="icon"><use href="#i-file"/></svg>orchestrate SKILL.md, section 4</a></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= THE KITCHEN ITSELF ================= -->
+<section class="block room" id="kitchen">
+  <div class="kicker">The kitchen itself</div>
+  <h2>Where the robots work</h2>
+  <p class="lede">I trust the agents. I don't trust anything around them. So agents get a lot of freedom, and my secrets get a lot of care.</p>
+  <div class="ideas">
+    <div class="idea">
+      <b><svg class="icon"><use href="#i-store"/></svg>One kitchen that never closes</b>
+      <p>The agents live on one server that is always on. Head chefs, lanes and their worktrees all stay there, so nothing stops when I close my laptop.</p>
+      <p class="side">Big builds and test runs go to my other machines. A small broker hands out each job and moves it when I need that machine back.</p>
+    </div>
+    <div class="idea">
+      <b><svg class="icon"><use href="#i-check"/></svg>Full trust inside the kitchen</b>
+      <p>Inside their own environment, agents run with no permission prompts and with passwordless root.</p>
+      <p class="side">Why: agents gain nothing from cheating me, and today they are very good at not causing harm. The rules in AGENTS.md cover the real risks, like one agent wiping another agent's work.</p>
+    </div>
+    <div class="idea">
+      <b><svg class="icon"><use href="#i-lock"/></svg>Keys they use but never see</b>
+      <p>All my API keys sit in one encrypted store. Agents use a key by its name.</p>
+      <p class="side">A hook runs before and after every tool call. It swaps any key it finds for the key's name, so a real key never shows up in a chat, a transcript or a log.</p>
+    </div>
+    <div class="idea">
+      <b><svg class="icon"><use href="#i-wrench"/></svg>A way into every service</b>
+      <p>Every service I use has a way in, from best to last resort:</p>
+      <ol>
+        <li>its official MCP server</li>
+        <li>a skill with the official API docs and the name of its key</li>
+        <li>a skill for the service's own internal API, with the login in my password manager</li>
+        <li>steps for the agent to click through the website itself, for sites with no API, like my bank</li>
+      </ol>
+    </div>
+    <div class="idea">
+      <b><svg class="icon"><use href="#i-branch"/></svg>A door to my other machines</b>
+      <p>From the server, agents reach my computers, servers, phone and TV over a private network (Tailscale).</p>
+      <p class="side">Access rules decide which machine can reach which, so the open doors are the ones I chose.</p>
+    </div>
+    <div class="idea">
+      <b><svg class="icon"><use href="#i-bot"/></svg>The right robot for each job</b>
+      <p>Strong models get taste, design and writing. Fast models get clear specs with tests. The routing rules above learn from every lane.</p>
+      <p class="side">The head chef asks me only about money, taste, things with no undo, and other people. A common one: host it myself, or pay for it? Paying often costs less.</p>
     </div>
   </div>
 </section>
@@ -875,12 +940,12 @@ workflow. Keep what already works. Skip what we do not need.</pre>
     <div class="term-bar"><i style="background:#ff6b6b"></i><i style="background:#f2c46b"></i><i style="background:#7fd8a8"></i><button class="copy" type="button" data-copy="cmd"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></div>
 <pre id="cmd"><span class="c"># download and unpack</span>
 curl -fsSL https://stack.yiin.dev/stack.tar.gz | tar -xz
-mkdir -p ~/.claude/skills ~/.claude/agents ~/.claude/hooks ~/.claude/tools
+mkdir -p ~/.claude/skills ~/.claude/agents ~/.agents/hooks ~/.agents/tools
 cp -rf stack/skills/* ~/.claude/skills/
 cp -f stack/agents/* ~/.claude/agents/
-cp -rf stack/tools/project-map ~/.claude/tools/
-cp -f stack/hooks/project-map-guard.sh ~/.claude/hooks/
-chmod +x ~/.claude/hooks/project-map-guard.sh
+cp -rf stack/tools/project-map ~/.agents/tools/
+cp -f stack/hooks/project-map-guard.sh ~/.agents/hooks/
+chmod +x ~/.agents/hooks/project-map-guard.sh
 <span class="c"># simmer, plus the /cook-it and /cook-epic skills (needs bun)</span>
 curl -fsSL https://raw.githubusercontent.com/Yiin/simmer/main/scripts/install.sh | bash
 <span class="c"># then edit stack/AGENTS.md and save it as ~/.claude/CLAUDE.md</span></pre>

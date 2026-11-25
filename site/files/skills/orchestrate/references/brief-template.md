@@ -1,9 +1,17 @@
 # Lane brief template
 
-Fill every section. An agent with no memory of the conversation, on any engine, must be able to do the right thing from this text alone. Delete a section only when it truly does not apply. Copy the "Rules for every lane" block unchanged.
+A lane rereads its whole conversation on every turn, so every line in the brief, every file it reads and every command output it keeps costs again on each later turn. Keep the brief lean: give the lane what only this lane needs, and point to the rest.
+
+Fill every section. An agent with no memory of the conversation, on any engine, must be able to do the right thing from this text plus the project lane rules. Delete a section only when it truly does not apply.
+
+- The rules every lane follows live once in the project lane rules ("Rules for every lane", from `references/lane-rules-template.md`). Do not paste them into the brief. If the project's lane rules lack that block, copy it there first.
+- "Read first" names the two or three doc sections this task needs, by heading or line range, not whole design folders.
+- "Skills" names only the skills this task needs. Say "none" when it needs none.
+- The Goal section is the paragraph a fix agent gets when landing fails (`bin/lane --land-cmd`). Write it so it stands alone.
+- Pick one of the two Delivery lines: the lane lands its own work, or the runner lands it (when you start the lane with `bin/lane --land-cmd`).
 
 ```
-You are lane <CODE> (<short title>) for <project>. Read the project lane rules first: <path to projects/<project>/lane-rules.md>. They apply in full, together with the rules at the end of this brief.
+You are lane <CODE> (<short title>) for <project>. Read the project lane rules first: <path to projects/<project>/lane-rules.md>. They apply in full, with their "Rules for every lane".
 
 Beads: claim <id> (and <id>). Parent epic: <id>.
 
@@ -12,12 +20,13 @@ Beads: claim <id> (and <id>). Parent epic: <id>.
 Screenshot: <repo path, if any>
 
 ## Goal
-<one paragraph: the outcome the owner will see or feel, and the bar>
+<one paragraph: the outcome the owner will see or feel, and the bar. It must stand alone.>
 
 ## Read first
-- <design doc>
-- <earlier lane log and what to take from it>
+- <doc>, section "<heading>" (or lines <a>-<b>): <what to take from it>
+- <earlier lane log: what to take from it>
 - <code area: path and what it does>
+Skills: <only the ones this task needs, or "none">
 
 ## What we already know
 - <facts with numbers, so you do not re-measure them>
@@ -34,32 +43,21 @@ Out of scope: <what not to touch; file beads for it instead>
 ## Proof and gates
 - <before/after at the owner's camera spot or input>
 - <measurements and their bars>
-- <tests and gates that must pass before you land the work>
+- <the gates that must pass, each named once>
 
 ## Other lanes running now
 - <LANE>: edits <files>. Do not touch them. Take in main often.
 
 ## Delivery
 - Worktree <path> (under ~/.local/share/agent-worktrees/, made with the skill's `bin/worktree new`), branch wt/<lane>. Lane log <path>, with timestamps. Work only there.
-- Land the work as the project lane rules say (merge, or commit only and leave landing to the release lane).
+- EITHER: Land the work as the project lane rules say.
+- OR: The runner lands the work. Do not run the land command and do not push. When your gates pass and your work is committed, end your report with the line READY-TO-LAND. If landing then fails, a fresh fix agent gets your lane log and the land summary, so keep the log current.
 - Review page: a self-contained `index.html` (images beside it, relative paths) in a NEW folder <path>/<lane>-review/. If your harness can publish pages, publish it and give the link. Otherwise the coordinator publishes it.
 - Do not deploy. Remove your worktree when done, unless the lane rules say the coordinator does.
 
-## Rules for every lane
-- You run unattended. Nobody answers questions mid-run. Decide inside this brief and the lane rules. Write any open question, with your recommendation, into your final report.
-- Do not stop early. Work until the scope is done and landed, or until a real blocker.
-- Waiting: do not end your turn to wait for a run. Wait inside one shell call on a PID or a log marker, with `timeout` (at most 10 min per call). Never wait with `until ! pgrep -f "<pattern>"`.
-- Gates: run the gates this brief lists, each once. A failure gets a fix and one rerun. Do not add repeats, variants or extra matrices unless a failure points to them. Take in main at most twice: at the start and before you land. A main intake that does not touch your files needs no new gate round. Once your gates pass, land the work at once.
-- A gate fails only for a real regression or a failed measurement. When a gate cannot run for a reason outside your scope, or compares the wrong things, apply the closest sound bar, say so plainly in the log and the report, land the work, and file a bead for the gap.
-- Do not spawn subagents.
-- Jobs on other machines: use the host picker the lane rules name, if any. Never hard-code host names.
-- The main checkout holds other agents' uncommitted files and unpushed commits. Never edit, stash, reset, commit or push there. If you push, push only from your worktree: `git rebase origin/<trunk>`, then `git push origin HEAD:<trunk>`. When the project's lane rules enforce the release lock, take it first and push with `RELEASE_LOCK_HOLDER=<name> RELEASE_LOCK_LANE=<lane>` on the push line. Never write in another lane's worktree. Do not kill processes you did not start.
-- No destructive git: no reset --hard, checkout --, restore, clean, stash, branch -D, force push. Never `git add -A` or `git add .`; add your files by name.
-- Guard and quote every variable in rm, mv, cp -f, rsync, find -delete, chmod/chown -R: "${dir:?}/${name:?}".
-- Never print tokens. Never commit .env files.
-- bd: claim your beads, close them with the commit SHA, file one bead per real follow-up.
-- Commit early and often. Keep the lane log current.
+## Lane-specific rules
+- <only rules that differ from or add to the project lane rules; leave the section out when there are none>
 
 ## Report
-Your final message is your report. Line 1: one sentence in product words that says what changed for the user or player, with no IDs. The coordinator shows this line to the owner. Then, in short sentences, verdict first, no hype: before/after numbers, gates and their results, commit SHAs, review page path or link, beads closed and filed, and any decision you need from the coordinator with your recommendation.
+Your final message is your report. Line 1: one sentence in product words that says what changed for the user or player, with no IDs. The coordinator shows this line to the owner. Then, in short sentences, verdict first, no hype: before/after numbers, gates and their results, commit SHAs, review page path or link, beads closed and filed, and any decision you need from the coordinator with your recommendation. When the runner lands the work, the last line is READY-TO-LAND, alone on its line, and only when the work is committed and its gates pass.
 ```

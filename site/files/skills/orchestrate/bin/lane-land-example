@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Example --land-cmd for a project that gates with `mise run check` and a pre-push hook.
+# Runs in a leased lane host checkout. The runner copies the summary back.
+set -u
+summary="${LANE_LAND_SUMMARY:?run this through bin/lane --docker --land-cmd}"
+export MISE_TRUSTED_CONFIG_PATHS="$PWD"
+exec 3>&1
+exec > "$summary" 2>&1
+
+finish() { printf 'LAND-RESULT %s %s\n' "$2" "$summary" >&3; exit "$1"; }
+
+git fetch --no-tags origin main || finish 3 infra
+if git merge-base --is-ancestor HEAD origin/main; then finish 4 nothing; fi
+if ! git rebase origin/main; then
+  if [ -n "$(git ls-files -u)" ]; then
+    git diff --name-only --diff-filter=U
+    finish 2 conflict
+  fi
+  finish 3 infra
+fi
+if git merge-base --is-ancestor HEAD origin/main; then finish 4 nothing; fi
+
+# The full check installs the Git hooks. Push normally so the pre-push hook also runs.
+mise run check || finish 1 gate-failed
+hook="$(git rev-parse --git-path hooks/pre-push)" || finish 3 infra
+if [ ! -x "$hook" ]; then
+  echo "Missing executable pre-push hook at $hook"
+  finish 3 infra
+fi
+
+# Git gives hook errors and remote rejections the same exit code.
+trace="$(mktemp)" || finish 3 infra
+trap 'rm -f "${trace:?}"' EXIT
+if GIT_TRACE2_EVENT="$trace" git push --porcelain origin HEAD:refs/heads/main; then
+  finish 0 landed
+fi
+if python3 - "$trace" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as trace:
+    events = [json.loads(line) for line in trace]
+if not events:
+    sys.exit(1)
+session = events[0]["sid"]
+hooks = set()
+for event in events:
+    if event["sid"] != session:
+        continue
+    if event["event"] == "child_start" and event.get("hook_name") == "pre-push":
+        hooks.add(event["child_id"])
+    if event["event"] == "child_exit" and event["child_id"] in hooks and event["code"]:
+        sys.exit(0)
+sys.exit(1)
+PY
+then
+  finish 1 gate-failed
+fi
+finish 3 infra

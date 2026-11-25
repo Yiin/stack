@@ -1,0 +1,432 @@
+#!/usr/bin/env python3
+"""Helper for bin/lane's container mode. bin/lane copies this file to the lane host.
+
+  lane-container run <spec-file> <command...>
+      On the lane host, inside the transient user unit lane-<name>. Waits for the runner's lease
+      barrier, relays the beads port when the spec names one, and runs the command in the lane
+      container lane-<name>. TERM (a stop or a dev-hosts revoke) stops the container.
+      Exit code: the command's; 2 for a setup failure; 143 when stopped.
+  lane-container inside <port> <command...>
+      In the container: relays tcp 127.0.0.1:<port> to /run/lane-sock/beads.sock, then execs the command.
+  lane-container merge <file>
+      On the lane host: merges the lane log. Reads {"base", "local"} as JSON on stdin, merges both into
+      <file> and prints the merged text.
+  lane-container sync-log <local file> <base file> <host> <remote helper> <remote file>
+      On the runner's machine: one round of the lane log sync. Coordinator notes added here reach
+      the lane; the lane's lines come back here.
+  lane-container mirror <brief> <worktree> [<skip dir>...]
+      On the runner's machine: prints what to mirror for a brief, one "<source>\t<target>" per line: the
+      files and small folders it names under ~, $HOME, /srv and /tmp (not under the worktree or a
+      skip dir), the skills, ~/.claude/CLAUDE.md and secret-scrub's index. System paths such as /etc stay the container's own.
+      Never mirrored: secret locations (DENY: ~/.ssh, ~/.config, ~/.claude, logins, keyrings), a folder that holds one,
+      files with secret names (SECRET_NAME), and folders under ~/.cache (scratch: the lane makes its own).
+      Each skipped path gets one "mirror: skipped" line on stderr.
+DOCKER (env) replaces the docker CLI, for tests.
+"""
+import json
+import os
+import re
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+HOME = os.path.expanduser("~")
+CAP = 200 * 1024 * 1024
+SKILL_ROOTS = [HOME + "/.agents/skills", HOME + "/.claude/skills", "/srv/agent-shared/agents/skills"]
+# Always mirrored when present: the owner's global instructions, and secret-scrub's index (salted digests of
+# the secrets, already synced to every machine) so the container's hook knows what to block.
+ALWAYS = [HOME + "/.claude/CLAUDE.md", HOME + "/.agents/tools/secret-scrub/index/index-v3.bin"]
+# Never mirrored, whatever a brief names: keys, logins, token stores and keyrings, by real path. A path inside one
+# of these, or a folder that holds one (such as ~ itself), is skipped. A brief that says "do not read ~/.ssh"
+# names the path too, so the rule cannot depend on the wording around it.
+DENY = [HOME + "/" + d for d in (
+    ".ssh", ".config", ".claude", ".gnupg", ".aws", ".azure", ".docker", ".kube", ".gemini", ".codex",
+    ".password-store", ".local/share/keyrings", ".netrc", ".git-credentials", ".npmrc", ".pypirc",
+    ".bash_history", ".zsh_history", ".python_history")]
+SECRET_NAME = re.compile(
+    r"(^\.env($|\.)|\.(pem|key|p12|pfx|kdbx|age)$|^id_[a-z0-9_]+(\.pub)?$|^\.?credentials(\.json)?$|^tokens?\.env)",
+    re.I)
+
+
+def pipe(a, b):
+    try:
+        while True:
+            data = a.recv(65536)
+            if not data:
+                break
+            b.sendall(data)
+    except OSError:
+        pass
+    for s in (a, b):
+        try:
+            s.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+
+def serve(listener, connect):
+    while True:
+        client, _ = listener.accept()
+        try:
+            upstream = connect()
+        except OSError:
+            client.close()
+            continue
+        for a, b in ((client, upstream), (upstream, client)):
+            threading.Thread(target=pipe, args=(a, b), daemon=True).start()
+
+
+def read_spec(path):
+    spec = {}
+    with open(path) as f:
+        for line in f:
+            key, sep, value = line.rstrip("\n").partition("=")
+            if sep:
+                spec[key] = value
+    return spec
+
+
+def wait_for_lease(barrier, seconds):
+    deadline = time.monotonic() + seconds
+    while not os.path.exists(barrier):
+        if time.monotonic() > deadline:
+            print("lane-container: no lease barrier", file=sys.stderr)
+            return False
+        time.sleep(1)
+    os.unlink(barrier)
+    return True
+
+
+def cmd_run(spec_path, command):
+    spec = read_spec(spec_path)
+    name, bdir, image = spec["LANE_NAME"], spec["LANE_DIR"], spec["LANE_IMAGE"]
+    docker = os.environ.get("DOCKER", "docker")
+    box = "lane-" + name
+    if not wait_for_lease(f"{bdir}/{name}.go", int(spec.get("LANE_BARRIER_SECONDS", "180"))):
+        return 2
+    sock_dir = bdir + "/sock"
+    os.makedirs(sock_dir, exist_ok=True)
+    forward = spec.get("LANE_FORWARD", "")
+    if forward:
+        sock_path = sock_dir + "/beads.sock"
+        if os.path.exists(sock_path):
+            os.unlink(sock_path)
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(sock_path)
+        listener.listen(16)
+
+        def connect():
+            # The runner rewrites beads.port when it restarts its ssh -R forward.
+            with open(bdir + "/beads.port") as f:
+                port = int(f.read().strip())
+            return socket.create_connection(("127.0.0.1", port), timeout=10)
+
+        threading.Thread(target=serve, args=(listener, connect), daemon=True).start()
+    memory = spec.get("LANE_MEMORY", "12g")
+    args = [docker, "run", "--rm", "--name", box, "--memory", memory, "--memory-swap", memory,
+            "--pids-limit", "8192", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--hostname", spec.get("LANE_HOST", "lane") + "-lane", "-e", "HOME=" + HOME, "-e", "LANG=" + os.environ.get("LANG", "C.UTF-8"),
+            "-w", spec["LANE_WORKTREE"],
+            "-v", f"{bdir}/repo:{spec['LANE_WORKTREE']}",
+            "-v", f"{bdir}/out:/run/lane-out",
+            "-v", f"{sock_dir}:/run/lane-sock",
+            "-v", f"{os.path.abspath(__file__)}:/run/lane-helper:ro",
+            "-v", f"{HOME}/.claude:/run/host-login:ro"]
+    scratch = None
+    if spec.get("LANE_DOCKER_GROUP"):
+        # The daemon opens bind sources on the host. Publish ports on the host loopback too.
+        mise_dir = HOME + "/.local/share/mise"
+        os.makedirs(bdir + "/mise", exist_ok=True)
+        args += ["--network", "host", "--user", f"{os.getuid()}:{os.getgid()}",
+                 "--group-add", spec["LANE_DOCKER_GROUP"], "-e", "LANE_DOCKER=1",
+                 "-v", "/var/run/docker.sock:/var/run/docker.sock",
+                 "-v", f"{bdir}/mise:{mise_dir}",
+                 "-v", f"{mise_dir}/installs:{mise_dir}/installs:ro",
+                 "-e", "MISE_TRUSTED_CONFIG_PATHS=" + spec["LANE_WORKTREE"]]
+        # Linux Unix socket paths have a 108-byte limit. Tests add long names under TMPDIR.
+        scratch = tempfile.TemporaryDirectory(prefix="lane-", dir="/tmp", ignore_cleanup_errors=True)
+        cache = bdir + "/cache"
+        os.makedirs(cache, exist_ok=True)
+        args += ["-e", f"TMPDIR={scratch.name}", "-v", f"{scratch.name}:{scratch.name}",
+                 "-e", f"XDG_CACHE_HOME={cache}", "-v", f"{cache}:{cache}"]
+        if spec.get("LANE_STACK_STATE"):
+            state = spec["LANE_STACK_STATE"]
+            os.makedirs(state, exist_ok=True)
+            args += ["-v", f"{state}:{state}"]
+        if os.path.isdir(HOME + "/.cache/ms-playwright"):
+            args += ["-e", f"PLAYWRIGHT_BROWSERS_PATH={HOME}/.cache/ms-playwright"]
+    if forward:
+        args += ["--add-host", forward.rsplit(":", 1)[0] + ":127.0.0.1"]
+    if spec.get("LANE_CPUS"):
+        args += ["--cpus", spec["LANE_CPUS"]]
+    for path in (HOME + "/Projects/simmer", HOME + "/.cache/ms-playwright"):
+        if os.path.isdir(path):
+            args += ["-v", f"{path}:{path}:ro"]
+    if os.path.isdir(bdir + "/agy"):
+        args += ["-v", f"{bdir}/agy:/run/lane-agy:ro"]
+    if os.path.isfile(bdir + "/beads-credentials"):
+        args += ["-v", f"{bdir}/beads-credentials:{HOME}/.config/beads/credentials:ro"]
+    if spec.get("LANE_LOG_DIR"):
+        args += ["-v", f"{bdir}/logdir:{spec['LANE_LOG_DIR']}"]
+    if os.path.isfile(bdir + "/mounts.list"):
+        with open(bdir + "/mounts.list") as f:
+            for target in f.read().splitlines():
+                if target:
+                    source, _, target = target.partition("\t")
+                    args += ["-v", f"{bdir}/mirror{source}:{target}:ro"]
+    if forward:
+        command = ["python3", "/run/lane-helper", "inside", forward.rsplit(":", 1)[1]] + command
+    if spec.get("LANE_DOCKER_GROUP"):
+        command = ["bash", "-c",
+                   'export PATH="$HOME/.local/share/mise/shims:/opt/lane/docker-mode:$PATH"; '
+                   'mise reshim && exec "$@"', "_"] + command
+    try:
+        child = subprocess.Popen(args + [image] + command)
+        stopped = []
+
+        def stop(signum, frame):
+            stopped.append(signum)
+            subprocess.run([docker, "stop", "-t", "60", box], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(sig, stop)
+        while True:
+            try:
+                rc = child.wait()
+                break
+            except InterruptedError:
+                continue
+        return 143 if stopped else rc
+    finally:
+        if scratch is not None:
+            scratch.cleanup()
+
+
+def cmd_land(barrier, repo, checkout, origin, script, summary):
+    if not wait_for_lease(barrier, 180):
+        return 3
+    try:
+        subprocess.run(["git", "clone", "--shared", "--quiet", repo, checkout], check=True)
+        subprocess.run(["git", "-C", checkout, "remote", "set-url", "origin", origin], check=True)
+    except subprocess.CalledProcessError:
+        return 3
+    env = {**os.environ, "LANE_LAND_SUMMARY": summary, "GIT_SSH_COMMAND": "ssh -o BatchMode=yes"}
+    return subprocess.call(["bash", script], cwd=checkout, env=env)
+
+
+def cmd_inside(port, command):
+    listener = socket.socket(socket.AF_INET)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", int(port)))
+    listener.listen(16)
+
+    def connect():
+        s = socket.socket(socket.AF_UNIX)
+        s.connect("/run/lane-sock/beads.sock")
+        return s
+
+    if os.fork() == 0:
+        os.setsid()
+        serve(listener, connect)
+        os._exit(0)
+    listener.close()
+    os.execvp(command[0], command)
+
+
+def merge_text(base, local, remote):
+    if local == remote or local == base:
+        return remote
+    if remote == base:
+        return local
+    if local.startswith(base) and remote.startswith(base):
+        tail = remote[len(base):]
+        if tail and not tail.endswith("\n"):
+            tail += "\n"
+        return base + tail + local[len(base):]
+    # Someone rewrote the file: keep the lane's copy and add the coordinator's new lines.
+    seen = set(remote.splitlines()) | set(base.splitlines())
+    extra = [line for line in local.splitlines(True) if line.rstrip("\n") not in seen]
+    if extra and remote and not remote.endswith("\n"):
+        remote += "\n"
+    return remote + "".join(extra)
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
+
+
+def write_atomic(path, text):
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def cmd_merge(path):
+    given = json.load(sys.stdin)
+    for _ in range(5):  # the lane may append while we merge: merge again with its new text
+        remote = read(path)
+        merged = merge_text(given["base"], given["local"], remote)
+        if merged == remote:
+            break
+        if read(path) == remote:
+            write_atomic(path, merged)
+            break
+    sys.stdout.write(merged)
+    return 0
+
+
+def cmd_sync_log(local_path, base_path, host, helper, remote_path):
+    local, base = read(local_path), read(base_path)
+    remote_cmd = " ".join(shlex.quote(a) for a in ["python3", helper, "merge", remote_path])
+    res = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, remote_cmd],
+                         input=json.dumps({"base": base, "local": local}), capture_output=True, text=True)
+    if res.returncode != 0:
+        return 1
+    merged = res.stdout
+    now = read(local_path)
+    if now != local:
+        # The coordinator wrote during the sync. Keep its new tail; after a rewrite, keep the old base and
+        # let the next sync merge it.
+        if not now.startswith(local):
+            return 0
+        tail = now[len(local):]
+        if merged and not merged.endswith("\n"):
+            merged += "\n"
+        write_atomic(local_path, merged + tail)
+    elif merged != local:
+        write_atomic(local_path, merged)
+    write_atomic(base_path, merged)
+    return 0
+
+
+def size(path):
+    if os.path.isfile(path):
+        return os.path.getsize(path)
+    out = subprocess.run(["du", "-sbL", path], capture_output=True, text=True).stdout
+    return int(out.split()[0]) if out else CAP + 1
+
+
+def inside(path, parent):
+    return path == parent or path.startswith(parent.rstrip("/") + "/")
+
+
+def denied(path):
+    """Why a path must not leave this machine, or None. Checks the real path, and every file under a folder."""
+    real = os.path.realpath(path)
+    for d in DENY:
+        if inside(real, d) or inside(path, d):
+            return "secret location " + d
+        if inside(d, real) or inside(d, path):
+            return "holds " + d
+    if SECRET_NAME.search(os.path.basename(real)) or SECRET_NAME.search(os.path.basename(path)):
+        return "secret file name"
+    if os.path.isdir(path):
+        seen = set()
+        for top, dirs, files in os.walk(path, followlinks=True):
+            rtop = os.path.realpath(top)
+            if rtop in seen:
+                dirs[:] = []
+                continue
+            seen.add(rtop)
+            for name in dirs + files:
+                full = os.path.join(top, name)
+                rfull = os.path.realpath(full)
+                if any(inside(rfull, d) for d in DENY):
+                    return f"{full} links into a secret location"
+                if name in files and SECRET_NAME.search(name):
+                    return f"{full} has a secret file name"
+    return None
+
+
+def cmd_mirror(brief, worktree, skip):
+    """Prints "<source>\t<target>" lines: the source on this machine, the target path in the container."""
+    text = read(brief)
+    found = []
+    for m in re.finditer(r"(?<![\w.$/-])(~|" + re.escape(HOME) + r"|/srv|/tmp)(/[^\s`'\"<>()\[\]{},;|*]*)", text):
+        path = m.group(1).replace("~", HOME, 1) + m.group(2)
+        path = path.rstrip(".:")
+        if path not in found:
+            found.append(path)
+    keep = []  # (source, target, is_dir)
+    skills = os.path.realpath(HOME + "/.agents/skills")
+    why = denied(skills) if os.path.isdir(skills) else "missing"
+    if why != "missing" and why:
+        print(f"mirror: skipped the skills {skills}: {why}", file=sys.stderr)
+    for root in SKILL_ROOTS:
+        if os.path.isdir(root) and not why:
+            keep.append((skills, root, True))
+    for path in ALWAYS:
+        if os.path.isfile(path):
+            keep.append((path, path, False))
+    blocked = [worktree] + list(skip)
+    for path in found:
+        if not os.path.exists(path) or os.path.realpath(path) == "/":
+            continue
+        if any(inside(path, b) for b in blocked):
+            continue
+        if any(is_dir and inside(path, t) for _, t, is_dir in keep):
+            continue
+        why = denied(path)
+        if why:
+            print(f"mirror: skipped {path}: {why}", file=sys.stderr)
+            continue
+        if os.path.isdir(path) and inside(os.path.realpath(path), HOME + "/.cache"):
+            print(f"mirror: skipped {path}: a folder under ~/.cache is scratch", file=sys.stderr)
+            continue
+        if os.path.isdir(path):
+            if os.path.isdir(path + "/.git") or os.path.isfile(path + "/.git"):
+                # A repository: only its top-level docs and its beads settings.
+                for name in sorted(os.listdir(path)):
+                    if name.endswith(".md") and os.path.isfile(f"{path}/{name}"):
+                        keep.append((f"{path}/{name}", f"{path}/{name}", False))
+                for name in (".beads/metadata.json", ".beads/config.yaml"):
+                    if os.path.isfile(f"{path}/{name}"):
+                        keep.append((f"{path}/{name}", f"{path}/{name}", False))
+                continue
+            if any(inside(b, path) for b in blocked) or size(path) > CAP:
+                continue
+            keep = [k for k in keep if not inside(k[1], path)]
+            keep.append((path, path, True))
+        elif size(path) <= CAP:
+            keep.append((path, path, False))
+    seen = set()
+    for source, target, _ in keep:
+        if target not in seen:
+            seen.add(target)
+            print(f"{source}\t{target}")
+    return 0
+
+
+def main(argv):
+    if len(argv) < 2:
+        print(__doc__, file=sys.stderr)
+        return 2
+    cmd, rest = argv[1], argv[2:]
+    if cmd == "run":
+        return cmd_run(rest[0], rest[1:])
+    if cmd == "land":
+        return cmd_land(*rest)
+    if cmd == "inside":
+        return cmd_inside(rest[0], rest[1:])
+    if cmd == "merge":
+        return cmd_merge(rest[0])
+    if cmd == "sync-log":
+        return cmd_sync_log(*rest[:5])
+    if cmd == "mirror":
+        return cmd_mirror(rest[0], rest[1], rest[2:])
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
