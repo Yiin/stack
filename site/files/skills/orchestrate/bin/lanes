@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Lane folders: logs, briefs, reports and review pages that lanes and coordinators write.
+
+  python3 lanes prune [--apply] [--older-than <days>]
+      In every lane root, delete review media (screenshots, videos, traces) older than <days> (default 14)
+      that no .html or .md page in the root links to, and gzip .log files over 1 MiB older than <days>.
+      Dry run without --apply. Pages, briefs, reports and small files always stay.
+
+Roots: $ORCHESTRATE_LANE_ROOTS (colon-separated globs) or the defaults below. A root that does not exist
+on this host is skipped. Inside ~/.agents, which may sync between machines, it only deletes: two hosts that
+gzip the same log at once would make sync conflicts, while two deletes of one file agree.
+
+Keeps media when in doubt: a page with a <script> tag that links no local media may build image paths in
+code, so every media file under that page's folder stays. Call it with python3, not by its executable bit:
+a file sync tool can drop the mode.
+"""
+import glob
+import gzip
+import os
+import re
+import shutil
+import sys
+import time
+from pathlib import Path
+from urllib.parse import unquote
+
+HOME = Path.home()
+DEFAULT_ROOTS = [
+    "~/.local/state/orchestrate/lanes",  # bin/lane --out-dir and coordinator lane folders
+    "~/.agents/orchestrate/projects",  # project folders; lane output must not land here
+]
+SYNCED = (HOME / ".agents").resolve()
+MEDIA = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".webm", ".mp4", ".mov", ".mkv"}
+PAGES = {".html", ".htm", ".md"}
+BIG_LOG = 1 << 20
+ATTR = re.compile(r"""(?:src|href|poster|srcset|data-src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))""", re.I)
+MD_LINK = re.compile(r"\]\(\s*<?([^)\s>]+)")
+SCRIPT = re.compile(r"<script\b", re.I)
+
+
+def is_media(path):
+    name = path.name.lower()
+    return path.suffix.lower() in MEDIA or (name.endswith(".zip") and "trace" in name)
+
+
+def roots():
+    spec = os.environ.get("ORCHESTRATE_LANE_ROOTS")
+    patterns = spec.split(":") if spec else DEFAULT_ROOTS
+    found = []
+    for pattern in patterns:
+        for match in sorted(glob.glob(os.path.expanduser(pattern))):
+            real = Path(match).resolve()
+            if real.is_dir() and real not in found:
+                found.append(real)
+    return found
+
+
+def walk(root):
+    """Regular files under root. Does not follow symlinks or cross into other file systems."""
+    device = root.stat().st_dev
+    for parent, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(parent, d))
+                   and os.lstat(os.path.join(parent, d)).st_dev == device]
+        for name in files:
+            path = Path(parent, name)
+            try:
+                st = path.lstat()
+            except FileNotFoundError:
+                continue
+            if path.is_file() and not path.is_symlink():
+                yield path, st
+
+
+def targets(page, text):
+    """Local paths a page links to, resolved against the page's folder."""
+    raw = []
+    for m in ATTR.finditer(text):
+        value = next(g for g in m.groups() if g is not None)
+        raw.extend(part.strip().split(" ")[0] for part in value.split(","))  # srcset lists several
+    raw.extend(MD_LINK.findall(text))
+    out = set()
+    for ref in raw:
+        ref = unquote(ref.split("#")[0].split("?")[0]).strip()
+        if not ref or re.match(r"^[a-z][a-z0-9+.-]*:", ref, re.I) or ref.startswith("//"):
+            continue  # http:, data:, mailto: and other non-file links
+        out.add(Path(os.path.normpath(page.parent / ref)))
+    return out
+
+
+def prune(apply, days):
+    cutoff = time.time() - days * 86400
+    total_deleted = total_saved = 0
+    for root in roots():
+        files = list(walk(root))
+        linked, guarded = set(), []
+        for path, _ in files:
+            if path.suffix.lower() not in PAGES:
+                continue
+            try:
+                text = path.read_text(errors="replace")
+            except OSError:
+                continue
+            links = targets(path, text)
+            linked |= links
+            if SCRIPT.search(text) and not any(is_media(p) for p in links):
+                guarded.append(path.parent)
+        synced = root == SYNCED or SYNCED in root.parents
+        deleted = deleted_bytes = logs = saved = 0
+        for path, st in files:
+            if st.st_mtime >= cutoff:  # media is written once; a file sync resets ctime
+                continue
+            if is_media(path):
+                if path in linked or any(g == path.parent or g in path.parents for g in guarded):
+                    continue
+                deleted += 1
+                deleted_bytes += st.st_blocks * 512
+                if apply:
+                    path.unlink(missing_ok=True)
+            elif path.suffix == ".log" and st.st_size > BIG_LOG and not synced:
+                logs += 1
+                if apply:
+                    packed = path.with_name(path.name + ".gz")
+                    if packed.exists():
+                        continue
+                    with open(path, "rb") as src, gzip.open(packed, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    os.utime(packed, (st.st_atime, st.st_mtime))
+                    saved += st.st_blocks * 512 - packed.stat().st_blocks * 512
+                    path.unlink()
+                else:
+                    saved += st.st_blocks * 512 * 9 // 10  # estimate; logs compress about tenfold
+        verb = "deleted" if apply else "would delete"
+        print(f"{root}: {verb} {deleted} media files ({deleted_bytes / 2**30:.1f}G), "
+              f"{'gzipped' if apply else 'would gzip'} {logs} logs ({saved / 2**30:.1f}G saved"
+              f"{'' if apply else ', estimated'}){', synced: no gzip' if synced else ''}", flush=True)
+        total_deleted += deleted_bytes
+        total_saved += saved
+    print(f"total: {(total_deleted + total_saved) / 2**30:.1f}G{'' if apply else ' [dry run; pass --apply]'}")
+
+
+def main(argv):
+    if not argv or argv[0] != "prune":
+        print(__doc__, file=sys.stderr)
+        return 2
+    apply, days, rest = False, 14, argv[1:]
+    while rest:
+        arg = rest.pop(0)
+        if arg == "--apply":
+            apply = True
+        elif arg == "--older-than" and rest and rest[0].isdigit() and int(rest[0]) > 0:
+            days = int(rest.pop(0))
+        else:
+            print(f"Unknown or bad prune option: {arg}", file=sys.stderr)
+            return 2
+    prune(apply, days)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

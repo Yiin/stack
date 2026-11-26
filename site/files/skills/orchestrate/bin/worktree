@@ -16,8 +16,12 @@
 #                                                process works in it. Prints "removed <dir>" or "kept <dir>
 #                                                (<reason>)". bin/lane runs it after a lane exits 0.
 #   worktree salvage <dir>                       save a dead worktree's uncommitted changes (patch plus a tar
-#                                                of untracked files) under <salvage>/<repo>/<lane>-<date>/,
-#                                                then remove the worktree. The branch stays. Prints the folder.
+#                                                of untracked files and of ignored files outside regenerable
+#                                                folders) under <salvage>/<repo>/<lane>-<date>[-N]/, then remove
+#                                                the worktree. The branch stays. Prints the folder.
+#   worktree salvage-idle <days> [--apply]       salvage every worktree under the root that nobody touched for
+#                                                <days>: no file changed, no commit, no process in it. Dry run
+#                                                without --apply. Run `clean` first; it removes the landed ones.
 #   worktree strays                              worktrees of repos under ~/Projects that live outside the
 #                                                root. Each one is a rules bug: move it or salvage it.
 #
@@ -56,10 +60,23 @@ in_use() { # true when a process runs with its working directory inside the work
 
 # Ignored folders and files that a build or install recreates. Any other ignored file may be work that git
 # never saw, such as a local .env or notes, so it keeps the worktree. bd recreates its runtime files in .beads/,
-# but not the rest of .beads/, which can hold an embedded issue database.
-regenerable='(^|/)(node_modules|dist|build|out|coverage|target|\.turbo|\.next|\.nuxt|\.svelte-kit|\.vite|\.cache|\.parcel-cache|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.venv|venv|test-results|playwright-report|blob-report|\.wrangler|storybook-static)(/|$)|\.(tsbuildinfo|log|pyc)$|(^|/)\.beads/(last-touched|\.local_version|\.sync-head|[^/]*\.lock)$'
+# but not the rest of .beads/, which can hold an embedded issue database. The bd gate writes .beads.gate.lock and
+# .sync-head at the repo root, and husky writes .husky/_/ on every install.
+regenerable='(^|/)(node_modules|dist|build|out|coverage|target|\.turbo|\.next|\.nuxt|\.svelte-kit|\.vite|\.cache|\.parcel-cache|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.venv|venv|test-results|playwright-report|blob-report|\.wrangler|storybook-static)(/|$)|\.(tsbuildinfo|log|pyc)$|(^|/)\.beads/(last-touched|\.local_version|\.sync-head|[^/]*\.lock)$|^(\.beads\.gate\.lock|\.sync-head)$|^\.husky/_(/|$)'
 
-unsaved_ignored() { # up to five ignored paths outside regenerable folders, comma-separated
+# Folders a build or install recreates, for the activity check. Package managers hardlink node_modules files
+# from a shared store, so any install or prune elsewhere changes their ctime; they say nothing about work.
+regenerable_dirs=(node_modules dist build out coverage target .turbo .next .nuxt .svelte-kit .vite .cache
+  .parcel-cache __pycache__ .pytest_cache .mypy_cache .ruff_cache .venv venv test-results playwright-report
+  blob-report .wrangler storybook-static)
+
+recent_change() { # prints one path changed (mtime or ctime) within <days> outside regenerable folders
+  local dir="$1" minutes=$(($2 * 1440)) prune=() name
+  for name in "${regenerable_dirs[@]}"; do prune+=(-name "$name" -o); done
+  find "$dir" -xdev -type d \( "${prune[@]}" -false \) -prune -o \( -mmin "-$minutes" -o -cmin "-$minutes" \) -print -quit
+}
+
+unsaved_ignored_all() { # every ignored path outside regenerable folders, one per line
   local dir="$1" entry
   { git -C "$dir" ls-files -z --others --ignored --exclude-standard --directory --no-empty-directory 2>/dev/null || true; } \
     | while IFS= read -r -d '' entry; do
@@ -69,7 +86,11 @@ unsaved_ignored() { # up to five ignored paths outside regenerable folders, comm
         else
           printf '%s\0' "$entry"
         fi
-      done | tr '\0' '\n' | { grep -vE "$regenerable" || true; } | head -5 | paste -sd, - || true
+      done | tr '\0' '\n' | { grep -vE "$regenerable" || true; }
+}
+
+unsaved_ignored() { # up to five ignored paths outside regenerable folders, comma-separated
+  unsaved_ignored_all "$1" | head -5 | paste -sd, - || true
 }
 
 keep_reason() { # prints why a worktree must stay; prints nothing when removing it loses no work. Fetch first.
@@ -140,7 +161,7 @@ case "$cmd" in
       branch="$(git -C "$dir" branch --show-current 2>/dev/null || true)"
       if [ "$older_than" -gt 0 ]; then
         # Include metadata and untracked files, so a recent checkout stays.
-        recent="$(find "$dir" -xdev \( -mmin "-$((older_than * 1440))" -o -cmin "-$((older_than * 1440))" \) -print -quit)"
+        recent="$(recent_change "$dir" "$older_than")"
         if [ -n "$recent" ]; then
           echo "keep    $dir ($branch: activity within ${older_than}d)"
           continue
@@ -179,20 +200,49 @@ case "$cmd" in
     common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir)"
     main_checkout="$(dirname "$common")"
     out="$salvage_root/$(basename "$main_checkout")/$(basename "$dir")-$(date +%Y%m%d)"
+    # Two worktrees with one lane name can die on the same day; never overwrite an earlier salvage.
+    n=1; base="$out"
+    while [ -e "$out" ]; do n=$((n + 1)); out="$base-$n"; done
     mkdir -p "$out"
+    branch="$(git -C "$dir" branch --show-current)"
+    if [ -z "$branch" ]; then
+      # A detached HEAD lives only in this worktree; give it a branch so its commits survive the removal.
+      branch="salvage/$(basename "$out")"
+      git -C "$dir" branch "$branch" HEAD
+    fi
     {
       echo "worktree $dir"
-      echo "branch $(git -C "$dir" branch --show-current)"
+      echo "branch $branch"
       echo "head $(git -C "$dir" rev-parse HEAD)"
       echo "saved $(date -Iseconds)"
     } > "$out/info.txt"
     git -C "$dir" diff --no-ext-diff --binary HEAD > "$out/changes.patch"
-    git -C "$dir" ls-files -o --exclude-standard -z > "$out/untracked.list0"
+    # Untracked files, plus ignored files that a build does not recreate (a local .env, notes).
+    { git -C "$dir" ls-files -o --exclude-standard -z; unsaved_ignored_all "$dir" | tr '\n' '\0'; } > "$out/untracked.list0"
     if [ -s "$out/untracked.list0" ]; then
       tar -C "$dir" --null -T "$out/untracked.list0" -czf "$out/untracked.tgz"
     fi
     git -C "$main_checkout" worktree remove --force "${dir:?}"
     echo "$out"
+    ;;
+  salvage-idle)
+    days="${2:-}"
+    [[ $days =~ ^[0-9]+$ ]] && [ "$days" -gt 0 ] || { echo 'usage: worktree salvage-idle <days> [--apply]' >&2; exit 2; }
+    apply="${3:-}"
+    each_worktree | while read -r dir; do
+      branch="$(git -C "$dir" branch --show-current 2>/dev/null || true)"
+      commit_time="$(git -C "$dir" log -1 --format=%ct 2>/dev/null || echo 0)"
+      idle_days=$(( ($(date +%s) - commit_time) / 86400 ))
+      [ "$idle_days" -ge "$days" ] || continue
+      recent="$(recent_change "$dir" "$days")"
+      [ -z "$recent" ] || continue
+      if in_use "$dir"; then continue; fi
+      if [ "$apply" = --apply ]; then
+        if out="$(bash "$0" salvage "$dir" 2>&1)"; then echo "salvaged $dir ($branch) -> $out"; else echo "failed  $dir ($out)"; fi
+      else
+        echo "salvage $dir ($branch: idle ${idle_days}d)  [dry run; pass --apply]"
+      fi
+    done
     ;;
   strays)
     for common in "$HOME"/Projects/*/.git; do
@@ -204,7 +254,7 @@ case "$cmd" in
     done
     ;;
   *)
-    sed -n '2,20p' "$0" >&2
+    sed -n '2,26p' "$0" >&2
     exit 2
     ;;
 esac

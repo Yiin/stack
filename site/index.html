@@ -710,6 +710,7 @@ workflow. Keep what already works. Skip what we do not need.</pre>
         <li>When the work is ready, the robot says so and stops. A script runs the tests and lands the work, with no model watching. If that fails, a fresh robot gets two tries to fix it.</li>
         <li>A lane can run on a spare machine, in a locked box that sees only the files its brief names.</li>
         <li>A watchdog checks every minute. It wakes the head chef only for something new: a stuck lane, a deploy, a machine low on memory, or a lane whose conversation grows too long.</li>
+        <li>Every night a cleanup runs on each machine. It deletes finished worktrees, saves abandoned ones as a patch, and deletes old screenshots that no review page shows.</li>
       </ul>
     </div>
 
@@ -749,6 +750,7 @@ workflow. Keep what already works. Skip what we do not need.</pre>
       <a href="files/skills/orchestrate/bin/lane"><svg class="icon"><use href="#i-terminal"/></svg>lane runner</a>
       <a href="files/skills/orchestrate/bin/watchdog"><svg class="icon"><use href="#i-terminal"/></svg>watchdog</a>
       <a href="files/skills/orchestrate/bin/lane-container"><svg class="icon"><use href="#i-terminal"/></svg>locked-box lane</a>
+      <a href="files/skills/orchestrate/bin/hygiene"><svg class="icon"><use href="#i-terminal"/></svg>nightly cleanup</a>
     </div>
   </div>
 </section>

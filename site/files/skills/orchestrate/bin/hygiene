@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Daily orchestrate cleanup on one host. Runs from this synced skill, so a change here reaches every host
+# without a new install.
+#
+#   hygiene              remove landed worktrees, salvage worktrees idle for 21 days, prune lane folders
+#   hygiene --dry-run    print what each step would do, change nothing
+#   hygiene install      install and start the user timer orchestrate-hygiene.timer on this host
+#
+# One runner per host. A host that already runs a daily disk cleanup job can call this script from that job
+# instead of installing the timer. Call it with bash, not by its executable bit: a file sync tool can drop
+# the mode.
+set -euo pipefail
+
+here="$(dirname "$(readlink -f "$0")")"
+idle_days=21
+self="$here/hygiene"
+
+install_units() {
+  local units="$HOME/.config/systemd/user"
+  mkdir -p "$units"
+  cat > "$units/orchestrate-hygiene.service" <<UNIT
+[Unit]
+Description=Orchestrate cleanup: landed worktrees, idle worktrees, lane media
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $self
+TimeoutStartSec=1h
+Nice=15
+IOSchedulingClass=idle
+UNIT
+  cat > "$units/orchestrate-hygiene.timer" <<UNIT
+[Unit]
+Description=Daily orchestrate cleanup
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user enable --now orchestrate-hygiene.timer
+  if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != yes ]; then
+    echo "Linger is off for $USER: the timer runs only while $USER is logged in. Fix: sudo loginctl enable-linger $USER" >&2
+  fi
+  systemctl --user list-timers orchestrate-hygiene.timer --no-pager
+}
+
+case "${1:-}" in
+  install) install_units; exit 0 ;;
+  --dry-run) dry=1 ;;
+  "") dry="" ;;
+  *) sed -n '2,11p' "$0" >&2; exit 2 ;;
+esac
+
+mkdir -p "$HOME/.local/state/orchestrate-hygiene"
+exec 9>"$HOME/.local/state/orchestrate-hygiene/lock"
+flock -n 9 || { echo "Another hygiene run holds the lock."; exit 0; }
+
+echo "== $(date -u +%FT%TZ) $(hostname)"
+if [ -n "$dry" ]; then
+  bash "$here/worktree" clean --older-than 2
+  bash "$here/worktree" salvage-idle "$idle_days"
+  python3 "$here/lanes" prune
+else
+  bash "$here/worktree" clean --older-than 2 --apply
+  # Salvage keeps the branch plus a patch and a tar of the files git does not track.
+  bash "$here/worktree" salvage-idle "$idle_days" --apply
+  python3 "$here/lanes" prune --apply
+fi
